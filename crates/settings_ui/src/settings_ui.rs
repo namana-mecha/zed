@@ -2562,25 +2562,46 @@ impl SettingsWindow {
         if let Some(error) =
             SettingsStore::global(cx).error_for_file(self.current_file.to_settings())
         {
+            fn banner(
+                label: &'static str,
+                error: String,
+                cx: &mut Context<SettingsWindow>,
+            ) -> impl IntoElement {
+                Banner::new()
+                    .severity(Severity::Warning)
+                    .child(Label::new(label).size(LabelSize::Large))
+                    .child(Label::new(error).size(LabelSize::Small).color(Color::Muted))
+                    .action_slot(
+                        Button::new("fix-in-json", "Fix in settings.json")
+                            .tab_index(0_isize)
+                            .style(ButtonStyle::OutlinedGhost)
+                            .on_click(cx.listener(|this, _, _, cx| {
+                                this.open_current_settings_file(cx);
+                            })),
+                    )
+            }
             warning_banner = v_flex()
                 .pb_4()
-                .child(
-                    Banner::new()
-                        .severity(Severity::Warning)
-                        .child(
-                            Label::new("Your Settings File is in an Invalid State. Setting Values May Be Incorrect, and Changes May Be Lost")
-                                .size(LabelSize::Large),
-                        )
-                        .child(Label::new(error).size(LabelSize::Small).color(Color::Muted))
-                        .action_slot(
-                            Button::new("fix-in-json", "Fix in settings.json")
-                                .tab_index(0_isize)
-                                .style(ButtonStyle::OutlinedGhost)
-                                .on_click(cx.listener(|this, _, _, cx| {
-                                    this.open_current_settings_file(cx);
-                                })),
-                        ),
-                )
+                .when_some(error.parse_result.err(), |this, err| {
+                    this.child(
+                        banner("Your Settings File Is In An Invalid State. Setting Values May Be Incorrect, And Changes May Be Lost", err, cx)
+                    )
+                })
+                .map(|this| {
+                    match error.migration_result {
+                        Ok(true) => {
+                            this.child(
+                                banner("Your Settings File Is Out Of Date, And Needs To Be Updated", "It May Be Possible To Automatically Migrate Your Settings File".to_string(), cx)
+                            )
+                        },
+                        Err(err) => {
+                            this.child(
+                                banner("Your Settings File Is Out Of Date, Automatic Migration Failed", err, cx)
+                            )
+                        }
+                        _ => this
+                    }
+                })
                 .into_any_element()
         }
 
