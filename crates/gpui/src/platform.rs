@@ -803,6 +803,51 @@ pub(crate) trait PlatformAtlas: Send + Sync {
     fn remove(&self, key: &AtlasKey);
 }
 
+/// A trait for platform-specific renderers that can render a scene to a window.
+/// This trait is implemented by the Blade, Metal, and DirectX renderers.
+#[allow(dead_code)]
+pub(crate) trait PlatformRenderer: Sized {
+    /// Configuration parameters needed to create a new renderer instance.
+    /// For Blade this is BladeSurfaceConfig, for Metal it might be different parameters.
+    type RenderParams;
+
+    /// Render a scene to the window
+    fn draw(&mut self, scene: &Scene);
+
+    /// Get the sprite atlas used for texture management
+    fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
+
+    /// Get information about the GPU this renderer is using
+    fn gpu_specs(&self) -> GpuSpecs;
+
+    /// Update the size of the drawable surface
+    fn update_drawable_size(&mut self, size: Size<DevicePixels>);
+
+    /// Update the transparency setting of the window
+    fn update_transparency(&mut self, transparent: bool);
+
+    /// Destroy the renderer and free its resources
+    fn destroy(&mut self);
+}
+
+/// A trait for platform-specific renderer contexts that manage renderer creation and shared state.
+/// This trait is implemented by context types like BladeContext and Metal's InstanceBufferPool.
+/// The context is typically shared across multiple windows and manages GPU resources.
+#[allow(dead_code)]
+pub(crate) trait PlatformRendererContext: Send + Sync {
+    /// The renderer type that this context creates
+    type Renderer: PlatformRenderer;
+
+    /// Create a new renderer instance for a window
+    fn create_renderer<
+        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        &self,
+        window: &I,
+        params: <Self::Renderer as PlatformRenderer>::RenderParams,
+    ) -> Result<Self::Renderer>;
+}
+
 struct AtlasTextureList<T> {
     textures: Vec<Option<T>>,
     free_list: Vec<usize>,

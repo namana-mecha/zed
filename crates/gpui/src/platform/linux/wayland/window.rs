@@ -34,8 +34,10 @@ use crate::{
     Capslock,
     platform::{
         PlatformAtlas, PlatformInputHandler, PlatformWindow,
-        blade::{BladeContext, BladeRenderer, BladeSurfaceConfig},
-        linux::wayland::{display::WaylandDisplay, serial::SerialKind},
+        linux::{
+            self, RendererContext, RendererParams,
+            wayland::{display::WaylandDisplay, serial::SerialKind},
+        },
     },
 };
 use crate::{WindowKind, scene::Scene};
@@ -95,7 +97,7 @@ pub struct WaylandWindowState {
     outputs: HashMap<ObjectId, Output>,
     display: Option<(ObjectId, Output)>,
     globals: Globals,
-    renderer: BladeRenderer,
+    renderer: linux::Renderer,
     bounds: Bounds<Pixels>,
     scale: f32,
     input_handler: Option<PlatformInputHandler>,
@@ -133,7 +135,7 @@ impl WaylandWindowState {
         viewport: Option<wp_viewport::WpViewport>,
         client: WaylandClientStatePtr,
         globals: Globals,
-        gpu_context: &BladeContext,
+        gpu_context: &RendererContext,
         options: WindowParams,
     ) -> anyhow::Result<Self> {
         let renderer = {
@@ -146,7 +148,7 @@ impl WaylandWindowState {
                     .display_ptr()
                     .cast::<c_void>(),
             };
-            let config = BladeSurfaceConfig {
+            let config = RendererParams {
                 size: gpu::Extent {
                     width: options.bounds.size.width.0 as u32,
                     height: options.bounds.size.height.0 as u32,
@@ -154,7 +156,7 @@ impl WaylandWindowState {
                 },
                 transparent: true,
             };
-            BladeRenderer::new(gpu_context, &raw_window, config)?
+            linux::Renderer::new(gpu_context, &raw_window, config)?
         };
 
         Ok(Self {
@@ -275,7 +277,7 @@ impl WaylandWindow {
     pub fn new(
         handle: AnyWindowHandle,
         globals: Globals,
-        gpu_context: &BladeContext,
+        gpu_context: &RendererContext,
         client: WaylandClientStatePtr,
         params: WindowParams,
         appearance: WindowAppearance,
