@@ -8,8 +8,8 @@ use glutin::{
     surface::{GlSurface, SurfaceAttributesBuilder, WindowSurface},
 };
 use impellers::{
-    Color, DisplayListBuilder, FillType, ISize, ImageFilter, Paint, PathBuilder, Point, Rect, Size,
-    TileMode,
+    BlendMode, ClipOperation, Color, ColorFilter, ColorMatrix, DisplayListBuilder, FillType, ISize,
+    ImageFilter, Matrix, Paint, PathBuilder, Point, Rect, Size, TextureSampling, TileMode,
 };
 
 use crate::{
@@ -98,7 +98,7 @@ impl ImpellerRenderer {
         let gl_surface = unsafe { gl_display.create_window_surface(&gl_config, &attrs)? };
 
         let gl_context = not_current_gl_context.make_current(&gl_surface)?;
-        let mut impeller_context: impellers::Context = unsafe {
+        let impeller_context: impellers::Context = unsafe {
             impellers::Context::new_opengl_es(|s| {
                 gl_context
                     .display()
@@ -113,8 +113,12 @@ impl ImpellerRenderer {
                     .get_proc_address(CString::new(s).unwrap().as_c_str()) as _
             }) as _
         };
+
+        let sprite_atlas = std::sync::Arc::new(ImpellerAtlas::new());
+        sprite_atlas.set_context(impeller_context.clone());
+
         Ok(Self {
-            sprite_atlas: std::sync::Arc::new(ImpellerAtlas::new()),
+            sprite_atlas,
             glow_context,
             gl_context,
             impeller_context,
@@ -335,12 +339,224 @@ impl PlatformRenderer for ImpellerRenderer {
                 PrimitiveBatch::MonochromeSprites {
                     texture_id,
                     sprites,
-                } => {}
+                } => {
+                    let texture = self.sprite_atlas.get_texture(texture_id);
+
+                    if let Some(texture) = texture {
+                        for sprite in sprites.iter() {
+                            let origin = sprite.bounds.origin;
+                            let size = sprite.bounds.size;
+
+                            let rgba_color = sprite.color.to_rgb();
+                            let color = Color::new_srgba(
+                                rgba_color.r,
+                                rgba_color.g,
+                                rgba_color.b,
+                                rgba_color.a,
+                            );
+
+                            let mut sprite_paint = Paint::default();
+                            let color_filter = ColorFilter::new_blend(color, BlendMode::SourceIn);
+                            sprite_paint.set_color_filter(&color_filter);
+
+                            let tile_bounds = sprite.tile.bounds;
+                            let src_rect = Rect::new(
+                                Point::new(
+                                    tile_bounds.origin.x.0 as f32,
+                                    tile_bounds.origin.y.0 as f32,
+                                ),
+                                Size::new(
+                                    tile_bounds.size.width.0 as f32,
+                                    tile_bounds.size.height.0 as f32,
+                                ),
+                            );
+
+                            let dst_rect = Rect::new(
+                                Point::new(origin.x.0, origin.y.0),
+                                Size::new(size.width.0, size.height.0),
+                            );
+
+                            let is_identity = sprite.transformation.rotation_scale
+                                == [[1.0, 0.0], [0.0, 1.0]]
+                                && sprite.transformation.translation == [0.0, 0.0];
+
+                            if !is_identity {
+                                builder.save();
+
+                                let transform = sprite.transformation;
+                                let matrix = Matrix::new(
+                                    transform.rotation_scale[0][0],
+                                    transform.rotation_scale[1][0],
+                                    0.0,
+                                    transform.translation[0],
+                                    transform.rotation_scale[0][1],
+                                    transform.rotation_scale[1][1],
+                                    0.0,
+                                    transform.translation[1],
+                                    0.0,
+                                    0.0,
+                                    1.0,
+                                    0.0,
+                                    0.0,
+                                    0.0,
+                                    0.0,
+                                    1.0,
+                                );
+
+                                builder.transform(&matrix);
+                            }
+
+                            builder.draw_texture_rect(
+                                &texture,
+                                &src_rect,
+                                &dst_rect,
+                                TextureSampling::Linear,
+                                Some(&sprite_paint),
+                            );
+
+                            if !is_identity {
+                                builder.restore();
+                            }
+                        }
+                    } else {
+                        // Fallback: draw colored rectangles when texture is not available
+                        for sprite in sprites.iter() {
+                            let origin = sprite.bounds.origin;
+                            let size = sprite.bounds.size;
+
+                            let rgba_color = sprite.color.to_rgb();
+                            let color = Color::new_srgba(
+                                rgba_color.r,
+                                rgba_color.g,
+                                rgba_color.b,
+                                rgba_color.a,
+                            );
+
+                            paint.set_color(color);
+
+                            let rect = Rect::new(
+                                Point::new(origin.x.0, origin.y.0),
+                                Size::new(size.width.0, size.height.0),
+                            );
+
+                            builder.draw_rect(&rect, &paint);
+                        }
+                    }
+                }
                 PrimitiveBatch::PolychromeSprites {
                     texture_id,
                     sprites,
-                } => {}
-                PrimitiveBatch::Surfaces(paint_surfaces) => {}
+                } => {
+                    let texture = self.sprite_atlas.get_texture(texture_id);
+
+                    if let Some(texture) = texture {
+                        for sprite in sprites.iter() {
+                            let origin = sprite.bounds.origin;
+                            let size = sprite.bounds.size;
+
+                            let color = Color::new_srgba(1.0, 1.0, 1.0, sprite.opacity);
+                            paint.set_color(color);
+
+                            if sprite.grayscale {
+                                let grayscale_matrix = ColorMatrix {
+                                    m: [
+                                        0.2126, 0.7152, 0.0722, 0.0, 0.0, 0.2126, 0.7152, 0.0722,
+                                        0.0, 0.0, 0.2126, 0.7152, 0.0722, 0.0, 0.0, 0.0, 0.0, 0.0,
+                                        1.0, 0.0,
+                                    ],
+                                };
+                                let filter = ColorFilter::new_matrix(grayscale_matrix);
+                                paint.set_color_filter(&filter);
+                            }
+
+                            let tile_bounds = sprite.tile.bounds;
+                            let src_rect = Rect::new(
+                                Point::new(
+                                    tile_bounds.origin.x.0 as f32,
+                                    tile_bounds.origin.y.0 as f32,
+                                ),
+                                Size::new(
+                                    tile_bounds.size.width.0 as f32,
+                                    tile_bounds.size.height.0 as f32,
+                                ),
+                            );
+
+                            let dst_rect = Rect::new(
+                                Point::new(origin.x.0, origin.y.0),
+                                Size::new(size.width.0, size.height.0),
+                            );
+
+                            let has_radii = sprite.corner_radii.top_left.0 > 0.0
+                                || sprite.corner_radii.top_right.0 > 0.0
+                                || sprite.corner_radii.bottom_left.0 > 0.0
+                                || sprite.corner_radii.bottom_right.0 > 0.0;
+
+                            if has_radii {
+                                builder.save();
+
+                                let radii: impellers::RoundingRadii = unsafe {
+                                    std::mem::transmute([
+                                        sprite.corner_radii.top_left.0,
+                                        sprite.corner_radii.top_left.0,
+                                        sprite.corner_radii.bottom_left.0,
+                                        sprite.corner_radii.bottom_left.0,
+                                        sprite.corner_radii.top_right.0,
+                                        sprite.corner_radii.top_right.0,
+                                        sprite.corner_radii.bottom_right.0,
+                                        sprite.corner_radii.bottom_right.0,
+                                    ])
+                                };
+
+                                let mut path_builder = PathBuilder::default();
+                                path_builder.add_rounded_rect(&dst_rect, &radii);
+                                let clip_path = path_builder.take_path_new(FillType::NonZero);
+                                builder.clip_path(&clip_path, ClipOperation::Intersect);
+                            }
+
+                            builder.draw_texture_rect(
+                                &texture,
+                                &src_rect,
+                                &dst_rect,
+                                TextureSampling::Linear,
+                                Some(&paint),
+                            );
+
+                            if has_radii {
+                                builder.restore();
+                            }
+                        }
+                    } else {
+                        // Fallback: draw colored rounded rectangles when texture is not available
+                        for sprite in sprites.iter() {
+                            let origin = sprite.bounds.origin;
+                            let size = sprite.bounds.size;
+
+                            let color = Color::new_srgba(1.0, 1.0, 1.0, sprite.opacity);
+                            paint.set_color(color);
+
+                            let radii: impellers::RoundingRadii = unsafe {
+                                std::mem::transmute([
+                                    sprite.corner_radii.top_left.0,
+                                    sprite.corner_radii.top_left.0,
+                                    sprite.corner_radii.bottom_left.0,
+                                    sprite.corner_radii.bottom_left.0,
+                                    sprite.corner_radii.top_right.0,
+                                    sprite.corner_radii.top_right.0,
+                                    sprite.corner_radii.bottom_right.0,
+                                    sprite.corner_radii.bottom_right.0,
+                                ])
+                            };
+
+                            let rect = Rect::new(
+                                Point::new(origin.x.0, origin.y.0),
+                                Size::new(size.width.0, size.height.0),
+                            );
+
+                            builder.draw_rounded_rect(&rect, &radii, &paint);
+                        }
+                    }
+                }
+                PrimitiveBatch::Surfaces(_paint_surfaces) => {}
             }
         }
         self.framebuffer
