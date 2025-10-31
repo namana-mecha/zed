@@ -73,6 +73,11 @@ x11 = [
     "open",
     "scap?/x11",
 ]
+linux-impeller = [
+    "impellers",
+    "glow",
+    "glutin",
+]
 screen-capture = [
     "scap",
 ]
@@ -135,6 +140,9 @@ waker-fn = "1.2.0"
 lyon = "1.0"
 libc.workspace = true
 pin-project = "1.1.10"
+impellers = { git = "https://github.com/coderedart/impellers.git", features = ["prebuilt_libs"], optional = true }
+glow = { version = "0.16.0", optional = true }
+glutin = { version = "0.32.3", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block = "0.1"

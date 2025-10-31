@@ -4,10 +4,11 @@ use x11rb::connection::RequestConnection;
 use crate::platform::linux::{self, RendererContext, RendererParams};
 use crate::{
     AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
-    Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene, Size,
-    Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
-    WindowDecorations, WindowKind, WindowParams, X11ClientStatePtr, px, size,
+    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
+    PlatformRenderer as _, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams,
+    X11ClientStatePtr, px, size,
 };
 
 use blade_graphics as gpu;
@@ -651,17 +652,25 @@ impl X11WindowState {
                     window_id: x_window,
                     visual_id: visual.id,
                 };
-                let config = RendererParams {
+
+                let size = query_render_extent(xcb, x_window)?;
+
+                #[cfg(feature = "linux-impeller")]
+                let params: RendererParams = (size.width, size.height);
+
+                #[cfg(not(feature = "linux-impeller"))]
+                let params = RendererParams {
                     // Note: this has to be done after the GPU init, or otherwise
                     // the sizes are immediately invalidated.
-                    size: query_render_extent(xcb, x_window)?,
+                    size,
                     // We set it to transparent by default, even if we have client-side
                     // decorations, since those seem to work on X11 even without `true` here.
                     // If the window appearance changes, then the renderer will get updated
                     // too
                     transparent: false,
                 };
-                linux::Renderer::new(gpu_context, &raw_window, config)?
+
+                linux::Renderer::new(gpu_context, &raw_window, params)?
             };
 
             let display = Rc::new(X11Display::new(xcb, scale_factor, x_screen_index)?);

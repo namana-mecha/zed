@@ -17,6 +17,9 @@ mod mac;
 ))]
 mod blade;
 
+#[cfg(feature = "linux-impeller")]
+mod impeller;
+
 #[cfg(any(test, feature = "test-support"))]
 mod test;
 

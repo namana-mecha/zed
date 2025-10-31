@@ -6,7 +6,6 @@ use std::{
     sync::Arc,
 };
 
-use blade_graphics as gpu;
 use collections::HashMap;
 use futures::channel::oneshot::Receiver;
 
@@ -26,9 +25,10 @@ use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 
 use crate::{
     AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
-    PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowControls, WindowDecorations, WindowParams, px, size,
+    PlatformDisplay, PlatformInput, PlatformRenderer as _, Point, PromptButton, PromptLevel,
+    RequestFrameOptions, ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
+    WindowParams, px, size,
 };
 use crate::{
     Capslock,
@@ -148,15 +148,24 @@ impl WaylandWindowState {
                     .display_ptr()
                     .cast::<c_void>(),
             };
-            let config = RendererParams {
-                size: gpu::Extent {
+
+            #[cfg(feature = "linux-impeller")]
+            let params: RendererParams = (
+                options.bounds.size.width.0 as u32,
+                options.bounds.size.height.0 as u32,
+            );
+
+            #[cfg(not(feature = "linux-impeller"))]
+            let params = RendererParams {
+                size: blade_graphics::Extent {
                     width: options.bounds.size.width.0 as u32,
                     height: options.bounds.size.height.0 as u32,
                     depth: 1,
                 },
                 transparent: true,
             };
-            linux::Renderer::new(gpu_context, &raw_window, config)?
+
+            linux::Renderer::new(gpu_context, &raw_window, params)?
         };
 
         Ok(Self {
