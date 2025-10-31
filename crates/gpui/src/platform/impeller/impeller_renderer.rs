@@ -119,7 +119,11 @@ impl ImpellerRenderer {
 
         let framebuffer = unsafe {
             impeller_context
-                .wrap_fbo(0, impellers::PixelFormat::RGBA8888, ISize::new(100, 100))
+                .wrap_fbo(
+                    0,
+                    impellers::PixelFormat::RGBA8888,
+                    ISize::new(config.0.into(), config.1.into()),
+                )
                 .unwrap()
         };
 
