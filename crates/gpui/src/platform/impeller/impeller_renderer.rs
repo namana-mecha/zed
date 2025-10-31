@@ -13,8 +13,8 @@ use impellers::{
 };
 
 use crate::{
-    GpuSpecs, PlatformRenderer, PrimitiveBatch,
     platform::impeller::{ImpellerAtlas, ImpellerContext},
+    GpuSpecs, PlatformRenderer, PrimitiveBatch,
 };
 
 pub struct ImpellerRenderer {
@@ -129,7 +129,7 @@ impl ImpellerRenderer {
             gl_context,
             impeller_context,
             gl_surface,
-            framebuffer: Some(framebuffer),
+            framebuffer: None,
         })
     }
 }
@@ -564,6 +564,9 @@ impl PlatformRenderer for ImpellerRenderer {
                 }
                 PrimitiveBatch::Surfaces(_paint_surfaces) => {}
             }
+        }
+        if self.framebuffer.is_none() {
+            return;
         }
         self.framebuffer
             .as_mut()
