@@ -13,8 +13,8 @@ use impellers::{
 };
 
 use crate::{
-    platform::impeller::{ImpellerAtlas, ImpellerContext},
     GpuSpecs, PlatformRenderer, PrimitiveBatch,
+    platform::impeller::{ImpellerAtlas, ImpellerContext},
 };
 
 pub struct ImpellerRenderer {
@@ -119,7 +119,7 @@ impl ImpellerRenderer {
 
         let framebuffer = unsafe {
             impeller_context
-                .wrap_fbo(0, impellers::PixelFormat::RGBA8888, ISize::new(0, 0))
+                .wrap_fbo(0, impellers::PixelFormat::RGBA8888, ISize::new(100, 100))
                 .unwrap()
         };
 
@@ -129,7 +129,7 @@ impl ImpellerRenderer {
             gl_context,
             impeller_context,
             gl_surface,
-            framebuffer: None,
+            framebuffer: Some(framebuffer),
         })
     }
 }
