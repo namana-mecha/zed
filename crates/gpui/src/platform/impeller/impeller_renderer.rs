@@ -98,7 +98,7 @@ impl ImpellerRenderer {
         let gl_surface = unsafe { gl_display.create_window_surface(&gl_config, &attrs)? };
 
         let gl_context = not_current_gl_context.make_current(&gl_surface)?;
-        let impeller_context: impellers::Context = unsafe {
+        let mut impeller_context: impellers::Context = unsafe {
             impellers::Context::new_opengl_es(|s| {
                 gl_context
                     .display()
@@ -117,13 +117,19 @@ impl ImpellerRenderer {
         let sprite_atlas = std::sync::Arc::new(ImpellerAtlas::new());
         sprite_atlas.set_context(impeller_context.clone());
 
+        let framebuffer = unsafe {
+            impeller_context
+                .wrap_fbo(0, impellers::PixelFormat::RGBA8888, ISize::new(0, 0))
+                .unwrap()
+        };
+
         Ok(Self {
             sprite_atlas,
             glow_context,
             gl_context,
             impeller_context,
             gl_surface,
-            framebuffer: None,
+            framebuffer: Some(framebuffer),
         })
     }
 }
