@@ -7,7 +7,10 @@ use glutin::{
     prelude::{GlDisplay, NotCurrentGlContext as _},
     surface::{GlSurface, SurfaceAttributesBuilder, WindowSurface},
 };
-use impellers::{Color, DisplayListBuilder, ISize, Paint, Point, Rect, Size};
+use impellers::{
+    Color, DisplayListBuilder, FillType, ISize, ImageFilter, Paint, PathBuilder, Point, Rect, Size,
+    TileMode,
+};
 
 use crate::{
     GpuSpecs, PlatformRenderer, PrimitiveBatch,
@@ -135,8 +138,6 @@ impl PlatformRenderer for ImpellerRenderer {
                         let origin = q.bounds.origin;
                         let size = q.bounds.size;
 
-                        // Convert corner radii from GPUI's Corners to impellers' RoundingRadii
-                        // Using transmute to construct from array since ImpellerPoint is not publicly exported
                         let radii: impellers::RoundingRadii = unsafe {
                             std::mem::transmute([
                                 q.corner_radii.top_left.0,
@@ -155,7 +156,6 @@ impl PlatformRenderer for ImpellerRenderer {
                             Size::new(size.width.0, size.height.0),
                         );
 
-                        // Draw background
                         let hsl_color = q.background.solid;
                         let rgba_color = hsl_color.to_rgb();
                         let color = Color::new_srgba(
@@ -168,14 +168,12 @@ impl PlatformRenderer for ImpellerRenderer {
                         paint.set_color(color);
                         builder.draw_rounded_rect(&rect, &radii, &paint);
 
-                        // Draw border if border widths are non-zero
                         let has_border = q.border_widths.top.0 > 0.0
                             || q.border_widths.right.0 > 0.0
                             || q.border_widths.bottom.0 > 0.0
                             || q.border_widths.left.0 > 0.0;
 
                         if has_border {
-                            // Convert border color
                             let border_rgba = q.border_color.to_rgb();
                             let border_color = Color::new_srgba(
                                 border_rgba.r,
@@ -183,9 +181,6 @@ impl PlatformRenderer for ImpellerRenderer {
                                 border_rgba.b,
                                 border_rgba.a,
                             );
-
-                            // For uniform borders, we can use the difference of two rounded rects
-                            // This creates a border effect
                             let border_width = q
                                 .border_widths
                                 .top
@@ -193,8 +188,6 @@ impl PlatformRenderer for ImpellerRenderer {
                                 .max(q.border_widths.right.0)
                                 .max(q.border_widths.bottom.0)
                                 .max(q.border_widths.left.0);
-
-                            // Calculate inner rect by shrinking the outer rect by border width
                             let inner_rect = Rect::new(
                                 Point::new(origin.x.0 + border_width, origin.y.0 + border_width),
                                 Size::new(
@@ -202,8 +195,6 @@ impl PlatformRenderer for ImpellerRenderer {
                                     size.height.0 - 2.0 * border_width,
                                 ),
                             );
-
-                            // Adjust inner corner radii by subtracting border width
                             let inner_radii: impellers::RoundingRadii = unsafe {
                                 std::mem::transmute([
                                     (q.corner_radii.top_left.0 - border_width).max(0.0),
@@ -228,9 +219,119 @@ impl PlatformRenderer for ImpellerRenderer {
                         }
                     }
                 }
-                PrimitiveBatch::Paths(paths) => {}
-                PrimitiveBatch::Shadows(shadows) => {}
-                PrimitiveBatch::Underlines(underlines) => {}
+                PrimitiveBatch::Paths(paths) => {
+                    for path in paths.iter() {
+                        let mut path_builder = PathBuilder::default();
+
+                        if path.vertices.is_empty() {
+                            continue;
+                        }
+                        let origin = path.bounds.origin;
+                        let size = path.bounds.size;
+
+                        path_builder.add_rect(&Rect::new(
+                            Point::new(origin.x.0, origin.y.0),
+                            Size::new(size.width.0, size.height.0),
+                        ));
+
+                        let impeller_path = path_builder.take_path_new(FillType::NonZero);
+                        let path_color = path.color.solid.to_rgb();
+                        paint.set_color(Color::new_srgba(
+                            path_color.r,
+                            path_color.g,
+                            path_color.b,
+                            path_color.a,
+                        ));
+
+                        builder.draw_path(&impeller_path, &paint);
+                    }
+                }
+                // TODO: Once draw_shadow is available in prebuilt libraries, switch to
+                // the native API for better Material Design shadow rendering.
+                PrimitiveBatch::Shadows(shadows) => {
+                    for shadow in shadows.iter() {
+                        let origin = shadow.bounds.origin;
+                        let size = shadow.bounds.size;
+
+                        let radii: impellers::RoundingRadii = unsafe {
+                            std::mem::transmute([
+                                shadow.corner_radii.top_left.0,
+                                shadow.corner_radii.top_left.0,
+                                shadow.corner_radii.bottom_left.0,
+                                shadow.corner_radii.bottom_left.0,
+                                shadow.corner_radii.top_right.0,
+                                shadow.corner_radii.top_right.0,
+                                shadow.corner_radii.bottom_right.0,
+                                shadow.corner_radii.bottom_right.0,
+                            ])
+                        };
+
+                        let blur_sigma = shadow.blur_radius.0 / 2.0;
+                        let spread = shadow.blur_radius.0 * 3.0;
+
+                        let shadow_rect = Rect::new(
+                            Point::new(origin.x.0 - spread, origin.y.0 - spread),
+                            Size::new(size.width.0 + 2.0 * spread, size.height.0 + 2.0 * spread),
+                        );
+
+                        let shadow_rgba = shadow.color.to_rgb();
+                        let shadow_color = Color::new_srgba(
+                            shadow_rgba.r,
+                            shadow_rgba.g,
+                            shadow_rgba.b,
+                            shadow_rgba.a,
+                        );
+
+                        {
+                            let mut shadow_paint = Paint::default();
+                            shadow_paint.set_color(shadow_color);
+                            if blur_sigma > 0.0 {
+                                let blur_filter =
+                                    ImageFilter::new_blur(blur_sigma, blur_sigma, TileMode::Clamp);
+                                shadow_paint.set_image_filter(&blur_filter);
+                            }
+                            builder.draw_rounded_rect(&shadow_rect, &radii, &shadow_paint);
+                        }
+                    }
+                }
+                PrimitiveBatch::Underlines(underlines) => {
+                    for underline in underlines.iter() {
+                        let origin = underline.bounds.origin;
+                        let size = underline.bounds.size;
+
+                        let underline_rgba = underline.color.to_rgb();
+                        let underline_color = Color::new_srgba(
+                            underline_rgba.r,
+                            underline_rgba.g,
+                            underline_rgba.b,
+                            underline_rgba.a,
+                        );
+
+                        paint.set_color(underline_color);
+
+                        if underline.wavy != 0 {
+                            let y = origin.y.0 + size.height.0 / 2.0;
+                            let start = Point::new(origin.x.0, y);
+                            let end = Point::new(origin.x.0 + size.width.0, y);
+
+                            let wave_length = underline.thickness.0 * 4.0;
+                            builder.draw_dashed_line(
+                                start,
+                                end,
+                                wave_length,
+                                wave_length / 2.0,
+                                &paint,
+                            );
+                        } else {
+                            let rect = Rect::new(
+                                Point::new(origin.x.0, origin.y.0),
+                                Size::new(size.width.0, underline.thickness.0),
+                            );
+                            builder.draw_rect(&rect, &paint);
+                        }
+                    }
+                }
+
                 PrimitiveBatch::MonochromeSprites {
                     texture_id,
                     sprites,
