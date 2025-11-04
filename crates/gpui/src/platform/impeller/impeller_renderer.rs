@@ -24,7 +24,9 @@ pub struct ImpellerRenderer {
     // TODO: Maybe move this to ImpellerContext
     gl_context: glutin::context::PossiblyCurrentContext,
     impeller_context: impellers::Context,
+    #[allow(dead_code)]
     glow_context: glow::Context,
+    transparent: bool,
 }
 impl ImpellerRenderer {
     pub fn new<I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle>(
@@ -134,6 +136,7 @@ impl ImpellerRenderer {
             impeller_context,
             gl_surface,
             framebuffer: Some(framebuffer),
+            transparent: false,
         })
     }
 }
@@ -143,7 +146,13 @@ impl PlatformRenderer for ImpellerRenderer {
     fn draw(&mut self, scene: &crate::Scene) {
         let mut builder = DisplayListBuilder::new(None);
         let mut paint = Paint::default();
-        paint.set_color(Color::BLACKBERRY);
+
+        // Emulate transparency by drawing either a transparent or opaque background
+        if self.transparent {
+            paint.set_color(Color::new_srgba(0.0, 0.0, 0.0, 0.0));
+        } else {
+            paint.set_color(Color::BLACKBERRY);
+        }
         builder.draw_paint(&paint);
         for batch in scene.batches() {
             match batch {
@@ -639,12 +648,14 @@ impl PlatformRenderer for ImpellerRenderer {
         };
         println!("Updated drawable size: {:?}", size);
     }
-
     fn update_transparency(&mut self, transparent: bool) {
-        println!("Transparancy update: {}", transparent);
+        // Note: The surface is kept transparent at the GL level (alpha_size: 8).
+        // We emulate transparency by drawing either a transparent or opaque background
+        // in the draw method, avoiding the need to recreate the GL surface.
+        self.transparent = transparent;
     }
 
     fn destroy(&mut self) {
-        todo!()
+        self.framebuffer = None;
     }
 }
