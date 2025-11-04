@@ -478,8 +478,8 @@ impl PlatformRenderer for ImpellerRenderer {
                             let origin = sprite.bounds.origin;
                             let size = sprite.bounds.size;
 
-                            let color = Color::new_srgba(1.0, 1.0, 1.0, sprite.opacity);
-                            paint.set_color(color);
+                            let mut sprite_paint = Paint::default();
+                            sprite_paint.set_blend_mode(BlendMode::SourceOver);
 
                             if sprite.grayscale {
                                 let grayscale_matrix = ColorMatrix {
@@ -490,7 +490,7 @@ impl PlatformRenderer for ImpellerRenderer {
                                     ],
                                 };
                                 let filter = ColorFilter::new_matrix(grayscale_matrix);
-                                paint.set_color_filter(&filter);
+                                sprite_paint.set_color_filter(&filter);
                             }
 
                             let tile_bounds = sprite.tile.bounds;
@@ -510,27 +510,44 @@ impl PlatformRenderer for ImpellerRenderer {
                                 Size::new(size.width.0, size.height.0),
                             );
 
+                            let radii: impellers::RoundingRadii = unsafe {
+                                std::mem::transmute([
+                                    sprite.corner_radii.top_left.0,
+                                    sprite.corner_radii.top_left.0,
+                                    sprite.corner_radii.bottom_left.0,
+                                    sprite.corner_radii.bottom_left.0,
+                                    sprite.corner_radii.top_right.0,
+                                    sprite.corner_radii.top_right.0,
+                                    sprite.corner_radii.bottom_right.0,
+                                    sprite.corner_radii.bottom_right.0,
+                                ])
+                            };
+
                             let has_radii = sprite.corner_radii.top_left.0 > 0.0
                                 || sprite.corner_radii.top_right.0 > 0.0
                                 || sprite.corner_radii.bottom_left.0 > 0.0
                                 || sprite.corner_radii.bottom_right.0 > 0.0;
 
+                            let content_mask_bounds = sprite.content_mask.bounds;
+                            let content_mask_rect = Rect::new(
+                                Point::new(
+                                    content_mask_bounds.origin.x.0,
+                                    content_mask_bounds.origin.y.0,
+                                ),
+                                Size::new(
+                                    content_mask_bounds.size.width.0,
+                                    content_mask_bounds.size.height.0,
+                                ),
+                            );
+
+                            builder.save();
+
+                            let mut path_builder = PathBuilder::default();
+                            path_builder.add_rect(&content_mask_rect);
+                            let content_mask_path = path_builder.take_path_new(FillType::NonZero);
+                            builder.clip_path(&content_mask_path, ClipOperation::Intersect);
+
                             if has_radii {
-                                builder.save();
-
-                                let radii: impellers::RoundingRadii = unsafe {
-                                    std::mem::transmute([
-                                        sprite.corner_radii.top_left.0,
-                                        sprite.corner_radii.top_left.0,
-                                        sprite.corner_radii.bottom_left.0,
-                                        sprite.corner_radii.bottom_left.0,
-                                        sprite.corner_radii.top_right.0,
-                                        sprite.corner_radii.top_right.0,
-                                        sprite.corner_radii.bottom_right.0,
-                                        sprite.corner_radii.bottom_right.0,
-                                    ])
-                                };
-
                                 let mut path_builder = PathBuilder::default();
                                 path_builder.add_rounded_rect(&dst_rect, &radii);
                                 let clip_path = path_builder.take_path_new(FillType::NonZero);
@@ -542,12 +559,10 @@ impl PlatformRenderer for ImpellerRenderer {
                                 &src_rect,
                                 &dst_rect,
                                 TextureSampling::Linear,
-                                Some(&paint),
+                                Some(&sprite_paint),
                             );
 
-                            if has_radii {
-                                builder.restore();
-                            }
+                            builder.restore();
                         }
                     } else {
                         // Fallback: draw colored rounded rectangles when texture is not available

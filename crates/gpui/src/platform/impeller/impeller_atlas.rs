@@ -138,9 +138,10 @@ impl PlatformAtlas for ImpellerAtlas {
                     } else {
                         let mut rgba_data = Vec::with_capacity(bytes.len());
                         for chunk in bytes.chunks_exact(4) {
-                            rgba_data.push(chunk[2]);
-                            rgba_data.push(chunk[1]);
-                            rgba_data.push(chunk[0]);
+                            let alpha = chunk[3] as f32 / 255.0;
+                            rgba_data.push((chunk[2] as f32 * alpha) as u8);
+                            rgba_data.push((chunk[1] as f32 * alpha) as u8);
+                            rgba_data.push((chunk[0] as f32 * alpha) as u8);
                             rgba_data.push(chunk[3]);
                         }
 
