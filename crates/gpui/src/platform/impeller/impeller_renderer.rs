@@ -195,30 +195,44 @@ impl PlatformRenderer for ImpellerRenderer {
                                 border_rgba.b,
                                 border_rgba.a,
                             );
-                            let border_width = q
-                                .border_widths
-                                .top
-                                .0
-                                .max(q.border_widths.right.0)
-                                .max(q.border_widths.bottom.0)
-                                .max(q.border_widths.left.0);
                             let inner_rect = Rect::new(
-                                Point::new(origin.x.0 + border_width, origin.y.0 + border_width),
+                                Point::new(
+                                    origin.x.0 + q.border_widths.left.0,
+                                    origin.y.0 + q.border_widths.top.0,
+                                ),
                                 Size::new(
-                                    size.width.0 - 2.0 * border_width,
-                                    size.height.0 - 2.0 * border_width,
+                                    size.width.0 - q.border_widths.left.0 - q.border_widths.right.0,
+                                    size.height.0
+                                        - q.border_widths.top.0
+                                        - q.border_widths.bottom.0,
                                 ),
                             );
                             let inner_radii: impellers::RoundingRadii = unsafe {
                                 std::mem::transmute([
-                                    (q.corner_radii.top_left.0 - border_width).max(0.0),
-                                    (q.corner_radii.top_left.0 - border_width).max(0.0),
-                                    (q.corner_radii.bottom_left.0 - border_width).max(0.0),
-                                    (q.corner_radii.bottom_left.0 - border_width).max(0.0),
-                                    (q.corner_radii.top_right.0 - border_width).max(0.0),
-                                    (q.corner_radii.top_right.0 - border_width).max(0.0),
-                                    (q.corner_radii.bottom_right.0 - border_width).max(0.0),
-                                    (q.corner_radii.bottom_right.0 - border_width).max(0.0),
+                                    (q.corner_radii.top_left.0
+                                        - q.border_widths.left.0.max(q.border_widths.top.0))
+                                    .max(0.0),
+                                    (q.corner_radii.top_left.0
+                                        - q.border_widths.left.0.max(q.border_widths.top.0))
+                                    .max(0.0),
+                                    (q.corner_radii.bottom_left.0
+                                        - q.border_widths.left.0.max(q.border_widths.bottom.0))
+                                    .max(0.0),
+                                    (q.corner_radii.bottom_left.0
+                                        - q.border_widths.left.0.max(q.border_widths.bottom.0))
+                                    .max(0.0),
+                                    (q.corner_radii.top_right.0
+                                        - q.border_widths.right.0.max(q.border_widths.top.0))
+                                    .max(0.0),
+                                    (q.corner_radii.top_right.0
+                                        - q.border_widths.right.0.max(q.border_widths.top.0))
+                                    .max(0.0),
+                                    (q.corner_radii.bottom_right.0
+                                        - q.border_widths.right.0.max(q.border_widths.bottom.0))
+                                    .max(0.0),
+                                    (q.corner_radii.bottom_right.0
+                                        - q.border_widths.right.0.max(q.border_widths.bottom.0))
+                                    .max(0.0),
                                 ])
                             };
 
@@ -398,17 +412,17 @@ impl PlatformRenderer for ImpellerRenderer {
                                     transform.rotation_scale[0][0],
                                     transform.rotation_scale[1][0],
                                     0.0,
-                                    transform.translation[0],
+                                    0.0,
                                     transform.rotation_scale[0][1],
                                     transform.rotation_scale[1][1],
                                     0.0,
-                                    transform.translation[1],
+                                    0.0,
                                     0.0,
                                     0.0,
                                     1.0,
                                     0.0,
-                                    0.0,
-                                    0.0,
+                                    transform.translation[0],
+                                    transform.translation[1],
                                     0.0,
                                     1.0,
                                 );
