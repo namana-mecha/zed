@@ -7,6 +7,7 @@ impl ImpellerContext {
         Ok(Self {})
     }
 }
+
 impl PlatformRendererContext for ImpellerContext {
     type Renderer = ImpellerRenderer;
 

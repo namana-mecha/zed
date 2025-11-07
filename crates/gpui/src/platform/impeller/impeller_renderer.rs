@@ -2,7 +2,7 @@ use std::{ffi::CString, num::NonZeroU32};
 
 use glutin::{
     config::{ConfigTemplateBuilder, GlConfig},
-    context::{ContextApi, ContextAttributesBuilder, Version},
+    context::{ContextApi, ContextAttributesBuilder, PossiblyCurrentGlContext as _, Version},
     display::GetGlDisplay,
     prelude::{GlDisplay, NotCurrentGlContext as _},
     surface::{GlSurface, SurfaceAttributesBuilder, WindowSurface},
@@ -21,7 +21,7 @@ pub struct ImpellerRenderer {
     sprite_atlas: std::sync::Arc<ImpellerAtlas>,
     framebuffer: Option<impellers::Surface>,
     gl_surface: glutin::surface::Surface<WindowSurface>,
-    // TODO: Maybe move this to ImpellerContext
+    // Each window has its own GL context for multi-window support
     gl_context: glutin::context::PossiblyCurrentContext,
     impeller_context: impellers::Context,
     #[allow(dead_code)]
@@ -144,6 +144,15 @@ impl PlatformRenderer for ImpellerRenderer {
     type RenderParams = (u32, u32);
 
     fn draw(&mut self, scene: &crate::Scene) {
+        // Make this context current before rendering
+        // This is critical for multi-window support - each window has its own GL context
+        // and we need to ensure the correct context is active before rendering
+        if !self.gl_context.is_current() {
+            self.gl_context
+                .make_current(&self.gl_surface)
+                .expect("Failed to make GL context current");
+        }
+
         let mut builder = DisplayListBuilder::new(None);
         let mut paint = Paint::default();
 
@@ -634,6 +643,13 @@ impl PlatformRenderer for ImpellerRenderer {
     }
 
     fn update_drawable_size(&mut self, size: crate::Size<crate::DevicePixels>) {
+        // Ensure the context is current before resizing
+        if !self.gl_context.is_current() {
+            self.gl_context
+                .make_current(&self.gl_surface)
+                .expect("Failed to make GL context current");
+        }
+
         self.gl_surface.resize(
             &self.gl_context,
             NonZeroU32::new(size.width.0 as u32).unwrap(),
@@ -646,7 +662,7 @@ impl PlatformRenderer for ImpellerRenderer {
                 ISize::new(size.width.0 as i64, size.height.0 as i64),
             )
         };
-        println!("Updated drawable size: {:?}", size);
+        log::debug!("Updated drawable size: {:?}", size);
     }
     fn update_transparency(&mut self, transparent: bool) {
         // Note: The surface is kept transparent at the GL level (alpha_size: 8).
