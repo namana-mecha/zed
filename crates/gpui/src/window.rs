@@ -1832,6 +1832,21 @@ impl Window {
         self.platform_window.set_client_inset(inset);
     }
 
+    /// Sets the input regions for the window (Wayland only).
+    ///
+    /// Input regions define which areas of the window can receive input events.
+    /// - `None`: Full window accepts input (default)
+    /// - `Some(vec![])`: No input accepted (fully click-through)
+    /// - `Some(vec![bounds1, bounds2, ...])`: Only specified rectangles accept input
+    ///
+    /// This is particularly useful for layer-shell windows like status bars where
+    /// you want only specific UI elements (buttons, panels) to be clickable while
+    /// the rest of the window is transparent to input.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn set_input_regions(&mut self, regions: Option<Vec<Bounds<Pixels>>>) {
+        self.platform_window.set_input_regions(regions);
+    }
+
     /// Returns the client_inset value by [`Self::set_client_inset`].
     pub fn client_inset(&self) -> Option<Pixels> {
         self.client_inset
