@@ -1667,4 +1667,8 @@ impl PlatformWindow for X11Window {
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.0.state.borrow().renderer.gpu_specs().into()
     }
+
+    fn set_input_regions(&self, _regions: Option<Vec<Bounds<Pixels>>>) {
+        // X11 doesn't support input regions 
+    }
 }

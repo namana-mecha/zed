@@ -553,6 +553,10 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);
 
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    #[allow(dead_code)]
+    fn set_input_regions(&self, _regions: Option<Vec<Bounds<Pixels>>>) {}
+
     #[cfg(any(test, feature = "test-support"))]
     fn as_test(&mut self) -> Option<&mut TestWindow> {
         None
