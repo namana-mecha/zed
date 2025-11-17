@@ -294,6 +294,8 @@ actions!(
         ToggleFocus,
         /// Toggles visibility of git-ignored files.
         ToggleHideGitIgnore,
+        /// Toggles visibility of hidden files.
+        ToggleHideHidden,
         /// Starts a new search in the selected directory.
         NewSearchInDirectory,
         /// Unfolds the selected directory.
@@ -358,13 +360,7 @@ impl FoldedAncestors {
     }
 }
 
-pub fn init_settings(cx: &mut App) {
-    ProjectPanelSettings::register(cx);
-}
-
 pub fn init(cx: &mut App) {
-    init_settings(cx);
-
     cx.observe_new(|workspace: &mut Workspace, _, _| {
         workspace.register_action(|workspace, _: &ToggleFocus, window, cx| {
             workspace.toggle_panel_focus::<ProjectPanel>(window, cx);
@@ -378,6 +374,19 @@ pub fn init(cx: &mut App) {
                         .project_panel
                         .get_or_insert_default()
                         .hide_gitignore
+                        .unwrap_or(false),
+                );
+            })
+        });
+
+        workspace.register_action(|workspace, _: &ToggleHideHidden, _, cx| {
+            let fs = workspace.app_state().fs.clone();
+            update_settings_file(fs, cx, move |setting, _| {
+                setting.project_panel.get_or_insert_default().hide_hidden = Some(
+                    !setting
+                        .project_panel
+                        .get_or_insert_default()
+                        .hide_hidden
                         .unwrap_or(false),
                 );
             })
@@ -1038,9 +1047,8 @@ impl ProjectPanel {
                                 "Copy Relative Path",
                                 Box::new(zed_actions::workspace::CopyRelativePath),
                             )
-                            .separator()
                             .when(!should_hide_rename, |menu| {
-                                menu.action("Rename", Box::new(Rename))
+                                menu.separator().action("Rename", Box::new(Rename))
                             })
                             .when(!is_root && !is_remote, |menu| {
                                 menu.action("Trash", Box::new(Trash { skip_prompt: false }))
@@ -1647,7 +1655,10 @@ impl ProjectPanel {
                             }
                         project_panel.update_visible_entries(None, false, false, window, cx);
                         if is_new_entry && !is_dir {
-                            project_panel.open_entry(new_entry.id, true, false, cx);
+                            let settings = ProjectPanelSettings::get_global(cx);
+                            if settings.auto_open.should_open_on_create() {
+                                project_panel.open_entry(new_entry.id, true, false, cx);
+                            }
                         }
                         cx.notify();
                     })?;
@@ -2701,15 +2712,16 @@ impl ProjectPanel {
 
                             if item_count == 1 {
                                 // open entry if not dir, setting is enabled, and only focus if rename is not pending
-                                if !entry.is_dir()
-                                    && ProjectPanelSettings::get_global(cx).open_file_on_paste
-                                {
-                                    project_panel.open_entry(
-                                        entry.id,
-                                        disambiguation_range.is_none(),
-                                        false,
-                                        cx,
-                                    );
+                                if !entry.is_dir() {
+                                    let settings = ProjectPanelSettings::get_global(cx);
+                                    if settings.auto_open.should_open_on_paste() {
+                                        project_panel.open_entry(
+                                            entry.id,
+                                            disambiguation_range.is_none(),
+                                            false,
+                                            cx,
+                                        );
+                                    }
                                 }
 
                                 // if only one entry was pasted and it was disambiguated, open the rename editor
@@ -3585,7 +3597,10 @@ impl ProjectPanel {
                 let opened_entries = task.await.with_context(|| "failed to copy external paths")?;
                 this.update(cx, |this, cx| {
                     if open_file_after_drop && !opened_entries.is_empty() {
-                        this.open_entry(opened_entries[0], true, false, cx);
+                        let settings = ProjectPanelSettings::get_global(cx);
+                        if settings.auto_open.should_open_on_drop() {
+                            this.open_entry(opened_entries[0], true, false, cx);
+                        }
                     }
                 })
             }
