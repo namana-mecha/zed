@@ -115,6 +115,8 @@ pub struct WaylandWindowState {
     in_progress_window_controls: Option<WindowControls>,
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
+    #[allow(dead_code)]
+    input_regions: Option<Vec<Bounds<Pixels>>>,
 }
 
 pub enum WaylandSurfaceState {
@@ -356,6 +358,7 @@ impl WaylandWindowState {
             in_progress_window_controls: None,
             window_controls: WindowControls::default(),
             client_inset: None,
+            input_regions: None,
         })
     }
 
@@ -1307,6 +1310,13 @@ impl PlatformWindow for WaylandWindow {
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.borrow().renderer.gpu_specs().into()
     }
+
+    fn set_input_regions(&self, regions: Option<Vec<Bounds<Pixels>>>) {
+        let mut state = self.borrow_mut();
+        state.input_regions = regions;
+        update_input_region(&mut state);
+        state.surface.commit();
+    }
 }
 
 fn update_window(mut state: RefMut<WaylandWindowState>) {
@@ -1357,6 +1367,36 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
     }
 
     region.destroy();
+}
+
+#[allow(dead_code)]
+fn update_input_region(state: &mut WaylandWindowState) {
+    match &state.input_regions {
+        None => {
+            // Default behavior: full window accepts input
+            state.surface.set_input_region(None);
+        }
+        Some(regions) => {
+            let region = state
+                .globals
+                .compositor
+                .create_region(&state.globals.qh, ());
+
+            for bounds in regions {
+                let bounds_px = bounds.map(|v| v.0 as i32);
+                region.add(
+                    bounds_px.origin.x,
+                    bounds_px.origin.y,
+                    bounds_px.size.width,
+                    bounds_px.size.height,
+                );
+            }
+
+            state.surface.set_input_region(Some(&region));
+
+            region.destroy();
+        }
+    }
 }
 
 impl WindowDecorations {
