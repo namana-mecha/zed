@@ -27,7 +27,7 @@ pub(crate) struct Scene {
     layer_stack: Vec<DrawOrder>,
     pub(crate) shadows: Vec<Shadow>,
     pub(crate) quads: Vec<Quad>,
-    pub(crate) polygons: Vec<Polygon>,
+    pub(crate) polygons: Vec<Polygon<ScaledPixels>>,
     pub(crate) paths: Vec<Path<ScaledPixels>>,
     pub(crate) underlines: Vec<Underline>,
     pub(crate) monochrome_sprites: Vec<MonochromeSprite>,
@@ -210,7 +210,7 @@ pub(crate) enum PaintOperation {
 pub(crate) enum Primitive {
     Shadow(Shadow),
     Quad(Quad),
-    Polygon(Polygon),
+    Polygon(Polygon<ScaledPixels>),
     Path(Path<ScaledPixels>),
     Underline(Underline),
     MonochromeSprite(MonochromeSprite),
@@ -260,9 +260,9 @@ struct BatchIterator<'a> {
     quads: &'a [Quad],
     quads_start: usize,
     quads_iter: Peekable<slice::Iter<'a, Quad>>,
-    polygons: &'a [Polygon],
+    polygons: &'a [Polygon<ScaledPixels>],
     polygons_start: usize,
-    polygons_iter: Peekable<slice::Iter<'a, Polygon>>,
+    polygons_iter: Peekable<slice::Iter<'a, Polygon<ScaledPixels>>>,
     paths: &'a [Path<ScaledPixels>],
     paths_start: usize,
     paths_iter: Peekable<slice::Iter<'a, Path<ScaledPixels>>>,
@@ -472,7 +472,7 @@ impl<'a> Iterator for BatchIterator<'a> {
 pub(crate) enum PrimitiveBatch<'a> {
     Shadows(&'a [Shadow]),
     Quads(&'a [Quad]),
-    Polygons(&'a [Polygon]),
+    Polygons(&'a [Polygon<ScaledPixels>]),
     Paths(&'a [Path<ScaledPixels>]),
     Underlines(&'a [Underline]),
     MonochromeSprites {
@@ -487,25 +487,25 @@ pub(crate) enum PrimitiveBatch<'a> {
 }
 
 #[derive(Default, Debug, Clone)]
-pub(crate) struct Polygon {
+pub(crate) struct Polygon<P: Clone + Debug + Default + PartialEq = ScaledPixels> {
     pub order: DrawOrder,
     pub border_style: BorderStyle,
-    pub bounds: Bounds<ScaledPixels>,
-    pub content_mask: ContentMask<ScaledPixels>,
+    pub bounds: Bounds<P>,
+    pub content_mask: ContentMask<P>,
     pub background: Background,
     pub border_color: Hsla,
-    pub border_width: ScaledPixels,
-    pub points: Vec<Point<ScaledPixels>>,
+    pub border_width: P,
+    pub points: Vec<Point<P>>,
 }
 
-impl Polygon {
-    pub fn insert_point(&mut self, point: Point<ScaledPixels>) {
+impl<P: Clone + Debug + Default + PartialEq> Polygon<P> {
+    pub fn insert_point(&mut self, point: Point<P>) {
         self.points.push(point);
     }
 }
 
-impl From<Polygon> for Primitive {
-    fn from(polygon: Polygon) -> Self {
+impl From<Polygon<ScaledPixels>> for Primitive {
+    fn from(polygon: Polygon<ScaledPixels>) -> Self {
         Primitive::Polygon(polygon)
     }
 }
@@ -893,4 +893,9 @@ impl PathVertex<Pixels> {
         }
     }
 }
+
+
+
+
+
 
