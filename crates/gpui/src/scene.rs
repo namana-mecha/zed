@@ -27,6 +27,7 @@ pub(crate) struct Scene {
     layer_stack: Vec<DrawOrder>,
     pub(crate) shadows: Vec<Shadow>,
     pub(crate) quads: Vec<Quad>,
+    pub(crate) polygons: Vec<Polygon>,
     pub(crate) paths: Vec<Path<ScaledPixels>>,
     pub(crate) underlines: Vec<Underline>,
     pub(crate) monochrome_sprites: Vec<MonochromeSprite>,
@@ -42,6 +43,7 @@ impl Scene {
         self.paths.clear();
         self.shadows.clear();
         self.quads.clear();
+        self.polygons.clear();
         self.underlines.clear();
         self.monochrome_sprites.clear();
         self.polychrome_sprites.clear();
@@ -88,6 +90,10 @@ impl Scene {
                 quad.order = order;
                 self.quads.push(quad.clone());
             }
+            Primitive::Polygon(polygon) => {
+                polygon.order = order;
+                self.polygons.push(polygon.clone());
+            }
             Primitive::Path(path) => {
                 path.order = order;
                 path.id = PathId(self.paths.len());
@@ -127,6 +133,7 @@ impl Scene {
     pub fn finish(&mut self) {
         self.shadows.sort_by_key(|shadow| shadow.order);
         self.quads.sort_by_key(|quad| quad.order);
+        self.polygons.sort_by_key(|quad| quad.order);
         self.paths.sort_by_key(|path| path.order);
         self.underlines.sort_by_key(|underline| underline.order);
         self.monochrome_sprites
@@ -151,6 +158,9 @@ impl Scene {
             quads: &self.quads,
             quads_start: 0,
             quads_iter: self.quads.iter().peekable(),
+            polygons: &self.polygons,
+            polygons_start: 0,
+            polygons_iter: self.polygons.iter().peekable(),
             paths: &self.paths,
             paths_start: 0,
             paths_iter: self.paths.iter().peekable(),
@@ -182,6 +192,7 @@ pub(crate) enum PrimitiveKind {
     Shadow,
     #[default]
     Quad,
+    Polygon,
     Path,
     Underline,
     MonochromeSprite,
@@ -199,6 +210,7 @@ pub(crate) enum PaintOperation {
 pub(crate) enum Primitive {
     Shadow(Shadow),
     Quad(Quad),
+    Polygon(Polygon),
     Path(Path<ScaledPixels>),
     Underline(Underline),
     MonochromeSprite(MonochromeSprite),
@@ -211,6 +223,7 @@ impl Primitive {
         match self {
             Primitive::Shadow(shadow) => &shadow.bounds,
             Primitive::Quad(quad) => &quad.bounds,
+            Primitive::Polygon(polygon) => &polygon.bounds,
             Primitive::Path(path) => &path.bounds,
             Primitive::Underline(underline) => &underline.bounds,
             Primitive::MonochromeSprite(sprite) => &sprite.bounds,
@@ -223,6 +236,7 @@ impl Primitive {
         match self {
             Primitive::Shadow(shadow) => &shadow.content_mask,
             Primitive::Quad(quad) => &quad.content_mask,
+            Primitive::Polygon(polygon) => &polygon.content_mask,
             Primitive::Path(path) => &path.content_mask,
             Primitive::Underline(underline) => &underline.content_mask,
             Primitive::MonochromeSprite(sprite) => &sprite.content_mask,
@@ -246,6 +260,9 @@ struct BatchIterator<'a> {
     quads: &'a [Quad],
     quads_start: usize,
     quads_iter: Peekable<slice::Iter<'a, Quad>>,
+    polygons: &'a [Polygon],
+    polygons_start: usize,
+    polygons_iter: Peekable<slice::Iter<'a, Polygon>>,
     paths: &'a [Path<ScaledPixels>],
     paths_start: usize,
     paths_iter: Peekable<slice::Iter<'a, Path<ScaledPixels>>>,
@@ -273,6 +290,10 @@ impl<'a> Iterator for BatchIterator<'a> {
                 PrimitiveKind::Shadow,
             ),
             (self.quads_iter.peek().map(|q| q.order), PrimitiveKind::Quad),
+            (
+                self.polygons_iter.peek().map(|q| q.order),
+                PrimitiveKind::Polygon,
+            ),
             (self.paths_iter.peek().map(|q| q.order), PrimitiveKind::Path),
             (
                 self.underlines_iter.peek().map(|u| u.order),
@@ -331,6 +352,22 @@ impl<'a> Iterator for BatchIterator<'a> {
                 }
                 self.quads_start = quads_end;
                 Some(PrimitiveBatch::Quads(&self.quads[quads_start..quads_end]))
+            }
+            PrimitiveKind::Polygon => {
+                let polygons_start = self.polygons_start;
+                let mut polygons_end = polygons_start + 1;
+                self.polygons_iter.next();
+                while self
+                    .polygons_iter
+                    .next_if(|polygon| (polygon.order, batch_kind) < max_order_and_kind)
+                    .is_some()
+                {
+                    polygons_end += 1;
+                }
+                self.polygons_start = polygons_end;
+                Some(PrimitiveBatch::Polygons(
+                    &self.polygons[polygons_start..polygons_end],
+                ))
             }
             PrimitiveKind::Path => {
                 let paths_start = self.paths_start;
@@ -435,6 +472,7 @@ impl<'a> Iterator for BatchIterator<'a> {
 pub(crate) enum PrimitiveBatch<'a> {
     Shadows(&'a [Shadow]),
     Quads(&'a [Quad]),
+    Polygons(&'a [Polygon]),
     Paths(&'a [Path<ScaledPixels>]),
     Underlines(&'a [Underline]),
     MonochromeSprites {
@@ -446,6 +484,30 @@ pub(crate) enum PrimitiveBatch<'a> {
         sprites: &'a [PolychromeSprite],
     },
     Surfaces(&'a [PaintSurface]),
+}
+
+#[derive(Default, Debug, Clone)]
+pub(crate) struct Polygon {
+    pub order: DrawOrder,
+    pub border_style: BorderStyle,
+    pub bounds: Bounds<ScaledPixels>,
+    pub content_mask: ContentMask<ScaledPixels>,
+    pub background: Background,
+    pub border_color: Hsla,
+    pub border_width: ScaledPixels,
+    pub points: Vec<Point<ScaledPixels>>,
+}
+
+impl Polygon {
+    pub fn insert_point(&mut self, point: Point<ScaledPixels>) {
+        self.points.push(point);
+    }
+}
+
+impl From<Polygon> for Primitive {
+    fn from(polygon: Polygon) -> Self {
+        Primitive::Polygon(polygon)
+    }
 }
 
 #[derive(Default, Debug, Clone)]
@@ -831,3 +893,4 @@ impl PathVertex<Pixels> {
         }
     }
 }
+

@@ -8,8 +8,9 @@ use glutin::{
     surface::{GlSurface, SurfaceAttributesBuilder, WindowSurface},
 };
 use impellers::{
-    BlendMode, ClipOperation, Color, ColorFilter, ColorMatrix, DisplayListBuilder, FillType, ISize,
-    ImageFilter, Matrix, Paint, PathBuilder, Point, Rect, Size, TextureSampling, TileMode,
+    BlendMode, ClipOperation, Color, ColorFilter, ColorMatrix, DisplayListBuilder, DrawStyle,
+    FillType, ISize, ImageFilter, Matrix, Paint, PathBuilder, Point, Rect, Size, TextureSampling,
+    TileMode,
 };
 
 use crate::{
@@ -262,6 +263,54 @@ impl PlatformRenderer for ImpellerRenderer {
                                 &inner_radii,
                                 &paint,
                             );
+                        }
+                    }
+                }
+                PrimitiveBatch::Polygons(polygons) => {
+                    for polygon in polygons.iter() {
+                        if polygon.points.is_empty() {
+                            continue;
+                        }
+
+                        let mut path_builder = PathBuilder::default();
+
+                        let first_point = &polygon.points[0];
+                        path_builder.move_to(Point::new(first_point.x.0, first_point.y.0));
+
+                        for point in polygon.points.iter().skip(1) {
+                            path_builder.line_to(Point::new(point.x.0, point.y.0));
+                        }
+
+                        path_builder.close();
+
+                        let impeller_path = path_builder.take_path_new(FillType::NonZero);
+
+                        let polygon_rgba = polygon.background.solid.to_rgb();
+                        let polygon_color = Color::new_srgba(
+                            polygon_rgba.r,
+                            polygon_rgba.g,
+                            polygon_rgba.b,
+                            polygon_rgba.a,
+                        );
+
+                        paint.set_color(polygon_color);
+                        builder.draw_path(&impeller_path, &paint);
+
+                        if polygon.border_width.0 > 0.0 {
+                            let border_rgba = polygon.border_color.to_rgb();
+                            let border_color = Color::new_srgba(
+                                border_rgba.r,
+                                border_rgba.g,
+                                border_rgba.b,
+                                border_rgba.a,
+                            );
+
+                            let mut border_paint = Paint::default();
+                            border_paint.set_color(border_color);
+                            border_paint.set_stroke_width(polygon.border_width.0);
+                            border_paint.set_draw_style(DrawStyle::Stroke);
+
+                            builder.draw_path(&impeller_path, &border_paint);
                         }
                     }
                 }
@@ -675,3 +724,8 @@ impl PlatformRenderer for ImpellerRenderer {
         self.framebuffer = None;
     }
 }
+
+
+
+
+
