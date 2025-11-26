@@ -2972,6 +2972,47 @@ impl Window {
             .insert_primitive(path.scale(scale_factor));
     }
 
+    /// Paint a polygon into the scene for the next frame at the current z-index.
+    ///
+    /// This method should only be called as part of the paint phase of element drawing.
+    pub fn paint_polygon(&mut self, polygon: PaintPolygon) {
+        self.invalidator.debug_assert_paint();
+
+        if polygon.points.is_empty() {
+            return;
+        }
+
+        let scale_factor = self.scale_factor();
+        let content_mask = self.content_mask();
+        let opacity = self.element_opacity();
+
+        let mut bounds = Bounds {
+            origin: polygon.points[0],
+            size: Default::default(),
+        };
+        for point in &polygon.points {
+            bounds = bounds.union(&Bounds {
+                origin: *point,
+                size: Default::default(),
+            });
+        }
+
+        self.next_frame.scene.insert_primitive(crate::scene::Polygon {
+            order: 0,
+            border_style: polygon.border_style,
+            bounds: bounds.scale(scale_factor),
+            content_mask: content_mask.scale(scale_factor),
+            background: polygon.background.opacity(opacity),
+            border_color: polygon.border_color.opacity(opacity),
+            border_width: polygon.border_width.scale(scale_factor),
+            points: polygon
+                .points
+                .into_iter()
+                .map(|p| p.scale(scale_factor))
+                .collect(),
+        });
+    }
+
     /// Paint an underline into the scene for the next frame at the current z-index.
     ///
     /// This method should only be called as part of the paint phase of element drawing.
@@ -5239,3 +5280,70 @@ pub fn outline(
         border_style,
     }
 }
+
+/// A polygon to be rendered in the window.
+/// Passed as an argument to [`Window::paint_polygon`].
+#[derive(Clone)]
+pub struct PaintPolygon {
+    /// The points that define the polygon.
+    pub points: Vec<Point<Pixels>>,
+    /// The background color of the polygon.
+    pub background: Background,
+    /// The width of the polygon's border.
+    pub border_width: Pixels,
+    /// The color of the polygon's border.
+    pub border_color: Hsla,
+    /// The style of the polygon's border.
+    pub border_style: BorderStyle,
+}
+
+impl PaintPolygon {
+    /// Sets the border width of the polygon.
+    pub fn border_width(self, border_width: impl Into<Pixels>) -> Self {
+        PaintPolygon {
+            border_width: border_width.into(),
+            ..self
+        }
+    }
+
+    /// Sets the border color of the polygon.
+    pub fn border_color(self, border_color: impl Into<Hsla>) -> Self {
+        PaintPolygon {
+            border_color: border_color.into(),
+            ..self
+        }
+    }
+
+    /// Sets the background color of the polygon.
+    pub fn background(self, background: impl Into<Background>) -> Self {
+        PaintPolygon {
+            background: background.into(),
+            ..self
+        }
+    }
+
+    /// Sets the border style of the polygon.
+    pub fn border_style(self, border_style: BorderStyle) -> Self {
+        PaintPolygon {
+            border_style,
+            ..self
+        }
+    }
+}
+
+/// Creates a filled polygon with the given points and background color.
+pub fn polygon(
+    points: impl IntoIterator<Item = Point<Pixels>>,
+    background: impl Into<Background>,
+) -> PaintPolygon {
+    PaintPolygon {
+        points: points.into_iter().collect(),
+        background: background.into(),
+        border_width: px(0.),
+        border_color: transparent_black(),
+        border_style: BorderStyle::default(),
+    }
+}
+
+
+
