@@ -87,6 +87,8 @@ pub(crate) use windows::*;
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub use linux::layer_shell;
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub use linux::session_lock;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use test::{TestDispatcher, TestScreenCaptureSource, TestScreenCaptureStream};
@@ -1392,6 +1394,11 @@ pub enum WindowKind {
     /// docks, notifications or wallpapers.
     #[cfg(all(target_os = "linux", feature = "wayland"))]
     LayerShell(layer_shell::LayerShellOptions),
+
+    /// A Wayland SessionLock window, used to create lock screens that take exclusive access
+    /// to all outputs.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    SessionLock(session_lock::SessionLockOptions),
 }
 
 /// The appearance of the window, as defined by the operating system.

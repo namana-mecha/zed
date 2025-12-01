@@ -8,6 +8,9 @@ mod window;
 /// Contains Types for configuring layer_shell surfaces.
 pub mod layer_shell;
 
+/// Contains Types for configuring session-lock surfaces.
+pub mod session_lock;
+
 pub(crate) use client::*;
 
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
