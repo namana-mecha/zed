@@ -94,8 +94,8 @@ impl ImpellerRenderer {
 
         let attrs = SurfaceAttributesBuilder::<WindowSurface>::new().build(
             window.window_handle().unwrap().as_raw(),
-            NonZeroU32::new(config.0).unwrap(),
-            NonZeroU32::new(config.1).unwrap(),
+            NonZeroU32::new(config.0.max(1)).unwrap(),
+            NonZeroU32::new(config.1.max(1)).unwrap(),
         );
 
         let gl_surface = unsafe { gl_display.create_window_surface(&gl_config, &attrs)? };
@@ -125,7 +125,7 @@ impl ImpellerRenderer {
                 .wrap_fbo(
                     0,
                     impellers::PixelFormat::RGBA8888,
-                    ISize::new(config.0.into(), config.1.into()),
+                    ISize::new(config.0.max(1).into(), config.1.max(1).into()),
                 )
                 .unwrap()
         };
@@ -701,14 +701,14 @@ impl PlatformRenderer for ImpellerRenderer {
 
         self.gl_surface.resize(
             &self.gl_context,
-            NonZeroU32::new(size.width.0 as u32).unwrap(),
-            NonZeroU32::new(size.height.0 as u32).unwrap(),
+            NonZeroU32::new((size.width.0 as u32).max(1)).unwrap(),
+            NonZeroU32::new((size.height.0 as u32).max(1)).unwrap(),
         );
         self.framebuffer = unsafe {
             self.impeller_context.wrap_fbo(
                 0,
                 impellers::PixelFormat::RGBA8888,
-                ISize::new(size.width.0 as i64, size.height.0 as i64),
+                ISize::new((size.width.0 as u32).max(1) as i64, (size.height.0 as u32).max(1) as i64),
             )
         };
         log::debug!("Updated drawable size: {:?}", size);
