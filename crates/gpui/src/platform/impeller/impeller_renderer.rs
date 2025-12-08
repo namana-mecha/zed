@@ -8,14 +8,14 @@ use glutin::{
     surface::{GlSurface, SurfaceAttributesBuilder, WindowSurface},
 };
 use impellers::{
-    BlendMode, ClipOperation, Color, ColorFilter, ColorMatrix, DisplayListBuilder, DrawStyle,
-    FillType, ISize, ImageFilter, Matrix, Paint, PathBuilder, Point, Rect, Size, TextureSampling,
-    TileMode,
+    BlendMode, ClipOperation, Color, ColorFilter, ColorMatrix, ColorSource, DisplayListBuilder,
+    DrawStyle, FillType, ISize, ImageFilter, Matrix, Paint, PathBuilder, Point, Rect, Size,
+    TextureSampling, TileMode,
 };
 
 use crate::{
-    GpuSpecs, PlatformRenderer, PrimitiveBatch,
-    platform::impeller::{ImpellerAtlas, ImpellerContext},
+    color::BackgroundTag, platform::impeller::{ImpellerAtlas, ImpellerContext}, GpuSpecs,
+    PlatformRenderer, PrimitiveBatch,
 };
 
 pub struct ImpellerRenderer {
@@ -189,17 +189,80 @@ impl PlatformRenderer for ImpellerRenderer {
                             Size::new(size.width.0, size.height.0),
                         );
 
-                        let hsl_color = q.background.solid;
-                        let rgba_color = hsl_color.to_rgb();
-                        let color = Color::new_srgba(
-                            rgba_color.r,
-                            rgba_color.g,
-                            rgba_color.b,
-                            rgba_color.a,
-                        );
+                        match q.background.tag {
+                            BackgroundTag::Solid => {
+                                let hsl_color = q.background.solid;
+                                let rgba_color = hsl_color.to_rgb();
+                                let color = Color::new_srgba(
+                                    rgba_color.r,
+                                    rgba_color.g,
+                                    rgba_color.b,
+                                    rgba_color.a,
+                                );
 
-                        paint.set_color(color);
-                        builder.draw_rounded_rect(&rect, &radii, &paint);
+                                paint.set_color(color);
+                                builder.draw_rounded_rect(&rect, &radii, &paint);
+                            }
+                            BackgroundTag::LinearGradient => {
+                                let angle = q.background.gradient_angle_or_pattern_height;
+                                let angle_rad = angle.to_radians();
+
+                                let center_x = origin.x.0 + size.width.0 / 2.0;
+                                let center_y = origin.y.0 + size.height.0 / 2.0;
+
+                                let diagonal =
+                                    ((size.width.0 * size.width.0 + size.height.0 * size.height.0)
+                                        .sqrt())
+                                        / 2.0;
+
+                                let start = Point::new(
+                                    center_x - angle_rad.sin() * diagonal,
+                                    center_y - angle_rad.cos() * diagonal,
+                                );
+                                let end = Point::new(
+                                    center_x + angle_rad.sin() * diagonal,
+                                    center_y + angle_rad.cos() * diagonal,
+                                );
+
+                                let color0 = q.background.colors[0].color.to_rgb();
+                                let color1 = q.background.colors[1].color.to_rgb();
+
+                                let colors = [
+                                    Color::new_srgba(color0.r, color0.g, color0.b, color0.a),
+                                    Color::new_srgba(color1.r, color1.g, color1.b, color1.a),
+                                ];
+
+                                let stops = [
+                                    q.background.colors[0].percentage,
+                                    q.background.colors[1].percentage,
+                                ];
+
+                                let gradient = ColorSource::new_linear_gradient(
+                                    start,
+                                    end,
+                                    &colors,
+                                    &stops,
+                                    TileMode::Clamp,
+                                    None,
+                                );
+
+                                paint.set_color_source(&gradient);
+                                builder.draw_rounded_rect(&rect, &radii, &paint);
+                            }
+                            BackgroundTag::PatternSlash => {
+                                let hsl_color = q.background.solid;
+                                let rgba_color = hsl_color.to_rgb();
+                                let color = Color::new_srgba(
+                                    rgba_color.r,
+                                    rgba_color.g,
+                                    rgba_color.b,
+                                    rgba_color.a,
+                                );
+
+                                paint.set_color(color);
+                                builder.draw_rounded_rect(&rect, &radii, &paint);
+                            }
+                        }
 
                         let has_border = q.border_widths.top.0 > 0.0
                             || q.border_widths.right.0 > 0.0
@@ -285,16 +348,81 @@ impl PlatformRenderer for ImpellerRenderer {
 
                         let impeller_path = path_builder.take_path_new(FillType::NonZero);
 
-                        let polygon_rgba = polygon.background.solid.to_rgb();
-                        let polygon_color = Color::new_srgba(
-                            polygon_rgba.r,
-                            polygon_rgba.g,
-                            polygon_rgba.b,
-                            polygon_rgba.a,
-                        );
+                        match polygon.background.tag {
+                            BackgroundTag::Solid => {
+                                let polygon_rgba = polygon.background.solid.to_rgb();
+                                let polygon_color = Color::new_srgba(
+                                    polygon_rgba.r,
+                                    polygon_rgba.g,
+                                    polygon_rgba.b,
+                                    polygon_rgba.a,
+                                );
 
-                        paint.set_color(polygon_color);
-                        builder.draw_path(&impeller_path, &paint);
+                                paint.set_color(polygon_color);
+                                builder.draw_path(&impeller_path, &paint);
+                            }
+                            BackgroundTag::LinearGradient => {
+                                let origin = polygon.bounds.origin;
+                                let size = polygon.bounds.size;
+
+                                let angle = polygon.background.gradient_angle_or_pattern_height;
+                                let angle_rad = angle.to_radians();
+
+                                let center_x = origin.x.0 + size.width.0 / 2.0;
+                                let center_y = origin.y.0 + size.height.0 / 2.0;
+
+                                let diagonal =
+                                    ((size.width.0 * size.width.0 + size.height.0 * size.height.0)
+                                        .sqrt())
+                                        / 2.0;
+
+                                let start = Point::new(
+                                    center_x - angle_rad.sin() * diagonal,
+                                    center_y - angle_rad.cos() * diagonal,
+                                );
+                                let end = Point::new(
+                                    center_x + angle_rad.sin() * diagonal,
+                                    center_y + angle_rad.cos() * diagonal,
+                                );
+
+                                let color0 = polygon.background.colors[0].color.to_rgb();
+                                let color1 = polygon.background.colors[1].color.to_rgb();
+
+                                let colors = [
+                                    Color::new_srgba(color0.r, color0.g, color0.b, color0.a),
+                                    Color::new_srgba(color1.r, color1.g, color1.b, color1.a),
+                                ];
+
+                                let stops = [
+                                    polygon.background.colors[0].percentage,
+                                    polygon.background.colors[1].percentage,
+                                ];
+
+                                let gradient = ColorSource::new_linear_gradient(
+                                    start,
+                                    end,
+                                    &colors,
+                                    &stops,
+                                    TileMode::Clamp,
+                                    None,
+                                );
+
+                                paint.set_color_source(&gradient);
+                                builder.draw_path(&impeller_path, &paint);
+                            }
+                            BackgroundTag::PatternSlash => {
+                                let polygon_rgba = polygon.background.solid.to_rgb();
+                                let polygon_color = Color::new_srgba(
+                                    polygon_rgba.r,
+                                    polygon_rgba.g,
+                                    polygon_rgba.b,
+                                    polygon_rgba.a,
+                                );
+
+                                paint.set_color(polygon_color);
+                                builder.draw_path(&impeller_path, &paint);
+                            }
+                        }
 
                         if polygon.border_width.0 > 0.0 {
                             let border_rgba = polygon.border_color.to_rgb();
