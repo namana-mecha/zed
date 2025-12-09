@@ -1847,6 +1847,21 @@ impl Window {
         self.platform_window.set_input_regions(regions);
     }
 
+    /// Returns the list of foreign toplevel windows currently tracked by the Wayland compositor.
+    ///
+    /// This provides access to all open windows in the session, allowing you to:
+    /// - Query window information (title, app_id, state)
+    /// - Control windows (maximize, minimize, close, activate, etc.)
+    ///
+    /// This is only available on Wayland with the zwlr_foreign_toplevel_management_v1 protocol.
+    /// Returns an empty vector if the protocol is not supported by the compositor.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn foreign_toplevels(
+        &self,
+    ) -> Vec<crate::foreign_toplevel_management::ForeignToplevelHandle> {
+        self.platform_window.foreign_toplevels()
+    }
+
     /// Returns the client_inset value by [`Self::set_client_inset`].
     pub fn client_inset(&self) -> Option<Pixels> {
         self.client_inset
@@ -2997,20 +3012,22 @@ impl Window {
             });
         }
 
-        self.next_frame.scene.insert_primitive(crate::scene::Polygon {
-            order: 0,
-            border_style: polygon.border_style,
-            bounds: bounds.scale(scale_factor),
-            content_mask: content_mask.scale(scale_factor),
-            background: polygon.background.opacity(opacity),
-            border_color: polygon.border_color.opacity(opacity),
-            border_width: polygon.border_width.scale(scale_factor),
-            points: polygon
-                .points
-                .into_iter()
-                .map(|p| p.scale(scale_factor))
-                .collect(),
-        });
+        self.next_frame
+            .scene
+            .insert_primitive(crate::scene::Polygon {
+                order: 0,
+                border_style: polygon.border_style,
+                bounds: bounds.scale(scale_factor),
+                content_mask: content_mask.scale(scale_factor),
+                background: polygon.background.opacity(opacity),
+                border_color: polygon.border_color.opacity(opacity),
+                border_width: polygon.border_width.scale(scale_factor),
+                points: polygon
+                    .points
+                    .into_iter()
+                    .map(|p| p.scale(scale_factor))
+                    .collect(),
+            });
     }
 
     /// Paint an underline into the scene for the next frame at the current z-index.
@@ -5344,6 +5361,3 @@ pub fn polygon(
         border_style: BorderStyle::default(),
     }
 }
-
-
-

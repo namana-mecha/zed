@@ -14,8 +14,9 @@ use impellers::{
 };
 
 use crate::{
-    color::BackgroundTag, platform::impeller::{ImpellerAtlas, ImpellerContext}, GpuSpecs,
-    PlatformRenderer, PrimitiveBatch,
+    GpuSpecs, PlatformRenderer, PrimitiveBatch,
+    color::BackgroundTag,
+    platform::impeller::{ImpellerAtlas, ImpellerContext},
 };
 
 pub struct ImpellerRenderer {
@@ -210,10 +211,10 @@ impl PlatformRenderer for ImpellerRenderer {
                                 let center_x = origin.x.0 + size.width.0 / 2.0;
                                 let center_y = origin.y.0 + size.height.0 / 2.0;
 
-                                let diagonal =
-                                    ((size.width.0 * size.width.0 + size.height.0 * size.height.0)
-                                        .sqrt())
-                                        / 2.0;
+                                let diagonal = ((size.width.0 * size.width.0
+                                    + size.height.0 * size.height.0)
+                                    .sqrt())
+                                    / 2.0;
 
                                 let start = Point::new(
                                     center_x - angle_rad.sin() * diagonal,
@@ -371,10 +372,10 @@ impl PlatformRenderer for ImpellerRenderer {
                                 let center_x = origin.x.0 + size.width.0 / 2.0;
                                 let center_y = origin.y.0 + size.height.0 / 2.0;
 
-                                let diagonal =
-                                    ((size.width.0 * size.width.0 + size.height.0 * size.height.0)
-                                        .sqrt())
-                                        / 2.0;
+                                let diagonal = ((size.width.0 * size.width.0
+                                    + size.height.0 * size.height.0)
+                                    .sqrt())
+                                    / 2.0;
 
                                 let start = Point::new(
                                     center_x - angle_rad.sin() * diagonal,
@@ -836,7 +837,10 @@ impl PlatformRenderer for ImpellerRenderer {
             self.impeller_context.wrap_fbo(
                 0,
                 impellers::PixelFormat::RGBA8888,
-                ISize::new((size.width.0 as u32).max(1) as i64, (size.height.0 as u32).max(1) as i64),
+                ISize::new(
+                    (size.width.0 as u32).max(1) as i64,
+                    (size.height.0 as u32).max(1) as i64,
+                ),
             )
         };
         log::debug!("Updated drawable size: {:?}", size);
@@ -852,8 +856,3 @@ impl PlatformRenderer for ImpellerRenderer {
         self.framebuffer = None;
     }
 }
-
-
-
-
-

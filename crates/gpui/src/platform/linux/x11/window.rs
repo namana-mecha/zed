@@ -1674,6 +1674,6 @@ impl PlatformWindow for X11Window {
     }
 
     fn set_input_regions(&self, _regions: Option<Vec<Bounds<Pixels>>>) {
-        // X11 doesn't support input regions 
+        // X11 doesn't support input regions
     }
 }

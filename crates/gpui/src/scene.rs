@@ -893,9 +893,3 @@ impl PathVertex<Pixels> {
         }
     }
 }
-
-
-
-
-
-

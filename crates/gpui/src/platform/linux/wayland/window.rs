@@ -12,7 +12,13 @@ use futures::channel::oneshot::Receiver;
 use raw_window_handle as rwh;
 use wayland_backend::client::ObjectId;
 use wayland_client::WEnum;
-use wayland_client::{Proxy, protocol::{wl_output, wl_surface}};
+use wayland_client::{
+    Proxy,
+    protocol::{wl_output, wl_surface},
+};
+use wayland_protocols::ext::session_lock::v1::client::{
+    ext_session_lock_surface_v1, ext_session_lock_v1,
+};
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1;
 use wayland_protocols::xdg::shell::client::xdg_surface;
@@ -23,17 +29,14 @@ use wayland_protocols::{
 };
 use wayland_protocols_plasma::blur::client::org_kde_kwin_blur;
 use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
-use wayland_protocols::ext::session_lock::v1::client::{
-    ext_session_lock_v1, ext_session_lock_surface_v1,
-};
 
 use crate::{
     AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
     PlatformDisplay, PlatformInput, PlatformRenderer as _, Point, PromptButton, PromptLevel,
     RequestFrameOptions, ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
-    WindowParams, layer_shell::LayerShellNotSupportedError,
-    session_lock::SessionLockNotSupportedError, px, size,
+    WindowParams, layer_shell::LayerShellNotSupportedError, px,
+    session_lock::SessionLockNotSupportedError, size,
 };
 use crate::{
     Capslock,
@@ -196,12 +199,8 @@ impl WaylandSurfaceState {
             // In a real implementation, you should create lock surfaces for ALL outputs
             if let Some(output) = first_output {
                 // Create a lock surface for this output
-                let lock_surface = session_lock.get_lock_surface(
-                    &surface,
-                    &output,
-                    &globals.qh,
-                    surface.id(),
-                );
+                let lock_surface =
+                    session_lock.get_lock_surface(&surface, &output, &globals.qh, surface.id());
 
                 return Ok(WaylandSurfaceState::SessionLock(
                     WaylandSessionLockSurfaceState {
@@ -530,7 +529,8 @@ impl WaylandWindow {
         first_output: Option<wl_output::WlOutput>,
     ) -> anyhow::Result<(Self, ObjectId)> {
         let surface = globals.compositor.create_surface(&globals.qh, ());
-        let surface_state = WaylandSurfaceState::new(&surface, &globals, &params, parent, first_output)?;
+        let surface_state =
+            WaylandSurfaceState::new(&surface, &globals, &params, parent, first_output)?;
 
         if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
             fractional_scale_manager.get_fractional_scale(&surface, &globals.qh, surface.id());
@@ -1418,6 +1418,13 @@ impl PlatformWindow for WaylandWindow {
         state.input_regions = regions;
         update_input_region(&mut state);
         state.surface.commit();
+    }
+
+    fn foreign_toplevels(&self) -> Vec<super::foreign_toplevel_management::ForeignToplevelHandle> {
+        let state = self.borrow();
+        let client = state.client.get_client();
+        let client_state = client.borrow();
+        client_state.foreign_toplevels.values().cloned().collect()
     }
 }
 

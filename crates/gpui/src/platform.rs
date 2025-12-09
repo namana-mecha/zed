@@ -86,6 +86,8 @@ pub(crate) use test::*;
 pub(crate) use windows::*;
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
+pub use linux::foreign_toplevel_management;
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub use linux::layer_shell;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub use linux::session_lock;
@@ -561,6 +563,13 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     #[cfg(all(target_os = "linux", feature = "wayland"))]
     #[allow(dead_code)]
     fn set_input_regions(&self, _regions: Option<Vec<Bounds<Pixels>>>) {}
+
+    /// Returns the list of foreign toplevel windows currently tracked by the compositor.
+    /// This is only available on Wayland with the zwlr_foreign_toplevel_management_v1 protocol.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    fn foreign_toplevels(&self) -> Vec<foreign_toplevel_management::ForeignToplevelHandle> {
+        Vec::new()
+    }
 
     #[cfg(any(test, feature = "test-support"))]
     fn as_test(&mut self) -> Option<&mut TestWindow> {

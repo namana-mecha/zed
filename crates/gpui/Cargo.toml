@@ -345,3 +345,7 @@ path = "examples/layer_shell.rs"
 [[example]]
 name = "session_lock"
 path = "examples/session_lock.rs"
+
+[[example]]
+name = "foreign_toplevel_list"
+path = "examples/foreign_toplevel_list.rs"

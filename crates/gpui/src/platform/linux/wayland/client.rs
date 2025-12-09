@@ -36,6 +36,9 @@ use wayland_client::{
         wl_shm_pool, wl_surface,
     },
 };
+use wayland_protocols::ext::session_lock::v1::client::{
+    ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1,
+};
 use wayland_protocols::wp::cursor_shape::v1::client::{
     wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1,
 };
@@ -62,10 +65,10 @@ use wayland_protocols::xdg::decoration::zv1::client::{
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
-use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
-use wayland_protocols::ext::session_lock::v1::client::{
-    ext_session_lock_manager_v1, ext_session_lock_v1, ext_session_lock_surface_v1,
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+    zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
 };
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
 use xkbcommon::xkb::{self, KEYMAP_COMPILE_NO_FLAGS, Keycode};
 
@@ -122,6 +125,8 @@ pub struct Globals {
     pub decoration_manager: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
     pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
     pub session_lock_manager: Option<ext_session_lock_manager_v1::ExtSessionLockManagerV1>,
+    pub foreign_toplevel_manager:
+        Option<zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1>,
     pub blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
     pub executor: ForegroundExecutor,
@@ -161,6 +166,7 @@ impl Globals {
             decoration_manager: globals.bind(&qh, 1..=1, ()).ok(),
             layer_shell: globals.bind(&qh, 1..=5, ()).ok(),
             session_lock_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            foreign_toplevel_manager: globals.bind(&qh, 1..=3, ()).ok(),
             blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
             executor,
@@ -219,6 +225,9 @@ pub(crate) struct WaylandClientState {
     outputs: HashMap<ObjectId, Output>,
     output_handles: HashMap<ObjectId, wl_output::WlOutput>,
     in_progress_outputs: HashMap<ObjectId, InProgressOutput>,
+    // Foreign toplevel handles
+    pub(crate) foreign_toplevels:
+        HashMap<ObjectId, super::foreign_toplevel_management::ForeignToplevelHandle>,
     keyboard_layout: LinuxKeyboardLayout,
     keymap_state: Option<xkb::State>,
     compose_state: Option<xkb::compose::State>,
@@ -610,6 +619,7 @@ impl WaylandClient {
             outputs: HashMap::default(),
             output_handles: HashMap::default(),
             in_progress_outputs,
+            foreign_toplevels: HashMap::default(),
             windows: HashMap::default(),
             common,
             keyboard_layout: LinuxKeyboardLayout::new(UNKNOWN_KEYBOARD_LAYOUT_NAME),
@@ -987,6 +997,85 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
             },
             wl_registry::Event::GlobalRemove { name: _ } => {
                 // TODO: handle global removal
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1, ()>
+    for WaylandClientStatePtr
+{
+    fn event(
+        this: &mut Self,
+        _: &zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1,
+        event: <zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } => {
+                let client = this.get_client();
+                let mut state = client.borrow_mut();
+                let handle =
+                    super::foreign_toplevel_management::ForeignToplevelHandle::new(toplevel);
+                state.foreign_toplevels.insert(handle.handle().id(), handle);
+            }
+            zwlr_foreign_toplevel_manager_v1::Event::Finished => {
+                log::info!("Foreign toplevel manager finished");
+            }
+            _ => {}
+        }
+    }
+
+    event_created_child!(WaylandClientStatePtr, zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1, [
+        zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1, ())
+    ]);
+}
+
+impl Dispatch<zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1, ()>
+    for WaylandClientStatePtr
+{
+    fn event(
+        this: &mut Self,
+        handle: &zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1,
+        event: <zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let state = client.borrow();
+
+        let Some(toplevel_handle) = state.foreign_toplevels.get(&handle.id()).cloned() else {
+            return;
+        };
+        drop(state);
+
+        match event {
+            zwlr_foreign_toplevel_handle_v1::Event::Title { title } => {
+                toplevel_handle.update_title(title);
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::AppId { app_id } => {
+                toplevel_handle.update_app_id(app_id);
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::OutputEnter { output } => {
+                toplevel_handle.add_output(&output);
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::OutputLeave { output } => {
+                toplevel_handle.remove_output(&output);
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::State { state } => {
+                toplevel_handle.update_state(state);
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Done => {}
+            zwlr_foreign_toplevel_handle_v1::Event::Closed => {
+                let mut state = client.borrow_mut();
+                state.foreign_toplevels.remove(&handle.id());
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Parent { parent } => {
+                toplevel_handle.update_parent(parent.as_ref());
             }
             _ => {}
         }

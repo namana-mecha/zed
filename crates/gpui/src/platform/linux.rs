@@ -56,6 +56,8 @@ pub(crate) type RendererParams = (u32, u32);
 pub(crate) type RendererParams = crate::platform::blade::BladeSurfaceConfig;
 
 #[cfg(feature = "wayland")]
+pub use wayland::foreign_toplevel_management;
+#[cfg(feature = "wayland")]
 pub use wayland::layer_shell;
 #[cfg(feature = "wayland")]
 pub use wayland::session_lock;

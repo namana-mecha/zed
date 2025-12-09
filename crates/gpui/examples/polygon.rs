@@ -1,6 +1,6 @@
 use gpui::{
     Application, Background, BorderStyle, Context, Hsla, MouseDownEvent, Pixels, Point, Render,
-    Window, WindowOptions, canvas, div, point, prelude::*, px, rgb, polygon,
+    Window, WindowOptions, canvas, div, point, polygon, prelude::*, px, rgb,
 };
 
 #[derive(Clone)]
@@ -24,7 +24,7 @@ impl PolygonViewer {
         let base_x = 80.;
         let base_y = 80.;
         let spacing = 200.;
-        
+
         // Triangle 1: Filled red
         polygons.push(PolygonStyle {
             points: vec![
@@ -70,7 +70,7 @@ impl PolygonViewer {
 
         // Row 2: Pentagons
         let base_y = 250.;
-        
+
         // Pentagon 1: Filled green
         let mut pentagon_points = vec![];
         for i in 0..5 {
@@ -124,7 +124,7 @@ impl PolygonViewer {
 
         // Row 3: Stars
         let base_y = 420.;
-        
+
         // Star 1: Filled purple
         let mut star_points = vec![];
         for i in 0..10 {
@@ -213,19 +213,16 @@ impl Render for PolygonViewer {
                                         polygon(style.points.clone(), style.background)
                                             .border_width(style.border_width)
                                             .border_color(style.border_color)
-                                            .border_style(style.border_style)
+                                            .border_style(style.border_style),
                                     );
                                 }
                             },
                         )
                         .size_full(),
                     )
-                    .on_mouse_down(
-                        gpui::MouseButton::Left,
-                        |_: &MouseDownEvent, _, _| {
-                            // Handle mouse down if needed
-                        },
-                    ),
+                    .on_mouse_down(gpui::MouseButton::Left, |_: &MouseDownEvent, _, _| {
+                        // Handle mouse down if needed
+                    }),
             )
     }
 }
@@ -247,9 +244,3 @@ fn main() {
         cx.activate(true);
     });
 }
-
-
-
-
-
-

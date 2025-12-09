@@ -9,9 +9,9 @@ fn main() {
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 mod example {
     use gpui::{
-        actions, div, prelude::*, px, rems, rgba, white, App, Application, Bounds, Context,
-        FontWeight, MouseButton, Point, Size, WeakEntity, Window, WindowBackgroundAppearance, WindowBounds,
-        WindowHandle, WindowKind, WindowOptions, session_lock::*,
+        App, Application, Bounds, Context, FontWeight, MouseButton, Point, Size, WeakEntity,
+        Window, WindowBackgroundAppearance, WindowBounds, WindowHandle, WindowKind, WindowOptions,
+        actions, div, prelude::*, px, rems, rgba, session_lock::*, white,
     };
 
     actions!(session_lock_example, [Lock]);
