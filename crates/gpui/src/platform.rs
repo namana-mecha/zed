@@ -4,6 +4,21 @@ mod keystroke;
 
 #[cfg(any(target_os = "linux", target_os = "freebsd"))]
 mod linux;
+#[cfg(all(
+    any(target_os = "linux", target_os = "freebsd"),
+    not(feature = "linux-gl")
+))]
+type Renderer = BladeRenderer;
+#[cfg(all(
+    any(target_os = "linux", target_os = "freebsd"),
+    not(feature = "linux-gl")
+))]
+type RendererContext = BladeContext;
+
+#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "linux-gl"))]
+type Renderer = GlRenderer;
+#[cfg(all(any(target_os = "linux", target_os = "freebsd"), feature = "linux-gl"))]
+type RendererContext = GlContext;
 
 #[cfg(target_os = "macos")]
 mod mac;
@@ -13,9 +28,17 @@ mod mac;
         any(target_os = "linux", target_os = "freebsd"),
         any(feature = "x11", feature = "wayland")
     ),
-    all(target_os = "macos", feature = "macos-blade")
+    all(target_os = "macos", feature = "macos-blade"),
+    not(feature = "linux-gl")
 ))]
 mod blade;
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "freebsd"),
+    any(feature = "x11", feature = "wayland"),
+    feature = "linux-gl"
+))]
+mod gl;
 
 #[cfg(any(test, feature = "test-support"))]
 mod test;
@@ -34,6 +57,18 @@ mod windows;
     )
 ))]
 pub(crate) mod scap_screen_capture;
+
+#[cfg(all(
+    any(target_os = "linux", target_os = "freebsd"),
+    not(feature = "linux-gl")
+))]
+use crate::platform::blade::{BladeContext, BladeRenderer};
+#[cfg(all(
+    any(target_os = "linux", target_os = "freebsd"),
+    any(feature = "x11", feature = "wayland"),
+    feature = "linux-gl"
+))]
+use crate::platform::gl::{GlContext, GlRenderer};
 
 use crate::{
     Action, AnyWindowHandle, App, AsyncWindowContext, BackgroundExecutor, Bounds,
@@ -819,6 +854,57 @@ impl From<RenderImageParams> for AtlasKey {
     fn from(params: RenderImageParams) -> Self {
         Self::Image(params)
     }
+}
+
+pub(crate) struct SurfaceConfig {
+    pub width: f32,
+    pub height: f32,
+    pub is_transparent: bool,
+}
+
+/// A trait for platform-specific renderers that can render a scene to a window.
+/// This trait is implemented by the Blade, Metal, and DirectX renderers.
+#[allow(dead_code)]
+pub(crate) trait PlatformRenderer: Sized {
+    /// Render a scene to the window
+    fn draw(&mut self, scene: &Scene);
+
+    /// Get the sprite atlas used for texture management
+    fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
+
+    /// Get information about the GPU this renderer is using
+    fn gpu_specs(&self) -> GpuSpecs;
+
+    /// Update the size of the drawable surface
+    fn update_drawable_size(&mut self, size: Size<DevicePixels>);
+
+    /// Update the transparency setting of the window
+    fn update_transparency(&mut self, transparent: bool);
+
+    /// Destroy the renderer and free its resources
+    fn destroy(&mut self);
+
+    fn viewport_size(&self) -> Size<f32>;
+}
+
+/// A trait for platform-specific renderer contexts that manage renderer creation and shared state.
+/// This trait is implemented by context types like BladeContext and Metal's InstanceBufferPool.
+/// The context is typically shared across multiple windows and manages GPU resources.
+#[allow(dead_code)]
+pub(crate) trait PlatformRendererContext: Send + Sync + Sized {
+    /// The renderer type that this context creates
+    type Renderer: PlatformRenderer;
+
+    fn new() -> Result<Self>;
+
+    /// Create a new renderer instance for a window
+    fn create_renderer<
+        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        &self,
+        window: &I,
+        config: SurfaceConfig,
+    ) -> Result<Self::Renderer>;
 }
 
 pub(crate) trait PlatformAtlas: Send + Sync {

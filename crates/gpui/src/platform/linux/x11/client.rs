@@ -1,4 +1,7 @@
-use crate::{Capslock, LinuxDispatcher, ResultExt as _, RunnableVariant, TaskTiming, xcb_flush};
+use crate::{
+    Capslock, LinuxDispatcher, ResultExt as _, RunnableVariant, TaskTiming,
+    platform::RendererContext, xcb_flush,
+ PlatformRendererContext};
 use anyhow::{Context as _, anyhow};
 use ashpd::WindowIdentifier;
 use calloop::{
@@ -437,7 +440,7 @@ impl X11Client {
             .to_string();
         let keyboard_layout = LinuxKeyboardLayout::new(layout_name.into());
 
-        let gpu_context = BladeContext::new().notify_err("Unable to init GPU context");
+        let gpu_context = RendererContext::new().notify_err("Unable to init GPU context");
 
         let resource_database = x11rb::resource_manager::new_from_default(&xcb_connection)
             .context("Failed to create resource database")?;

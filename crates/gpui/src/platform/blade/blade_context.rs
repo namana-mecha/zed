@@ -3,13 +3,38 @@ use blade_graphics as gpu;
 use std::sync::Arc;
 use util::ResultExt;
 
+use crate::{
+    PlatformRendererContext, SurfaceConfig,
+    platform::blade::{BladeRenderer, BladeSurfaceConfig},
+};
+
 #[cfg_attr(target_os = "macos", derive(Clone))]
 pub struct BladeContext {
     pub(super) gpu: Arc<gpu::Context>,
 }
 
-impl BladeContext {
-    pub fn new() -> anyhow::Result<Self> {
+impl PlatformRendererContext for BladeContext {
+    type Renderer = BladeRenderer;
+
+    fn create_renderer<
+        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        &self,
+        window: &I,
+        config: SurfaceConfig,
+    ) -> anyhow::Result<Self::Renderer> {
+        let config = BladeSurfaceConfig {
+            size: gpu::Extent {
+                width: config.width as u32,
+                height: config.height as u32,
+                depth: 1,
+            },
+            transparent: config.is_transparent,
+        };
+        BladeRenderer::new(self, window, config)
+    }
+
+    fn new() -> anyhow::Result<Self> {
         let device_id_forced = match std::env::var("ZED_DEVICE_ID") {
             Ok(val) => parse_pci_id(&val)
                 .context("Failed to parse device ID from `ZED_DEVICE_ID` environment variable")

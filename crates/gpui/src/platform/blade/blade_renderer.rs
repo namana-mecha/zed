@@ -3,8 +3,8 @@
 
 use super::{BladeAtlas, BladeContext};
 use crate::{
-    Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite,
-    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Underline,
+    Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, PlatformRenderer, Point,
+    PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Underline,
     get_gamma_correction_ratios,
 };
 use blade_graphics as gpu;
@@ -344,6 +344,40 @@ pub struct BladeRenderer {
     rendering_parameters: RenderingParameters,
 }
 
+impl PlatformRenderer for BladeRenderer {
+    fn draw(&mut self, scene: &Scene) {
+        self.draw(scene);
+    }
+
+    fn sprite_atlas(&self) -> Arc<dyn crate::PlatformAtlas> {
+        self.sprite_atlas().clone()
+    }
+
+    fn gpu_specs(&self) -> GpuSpecs {
+        self.gpu_specs()
+    }
+
+    fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
+        self.update_drawable_size(size);
+    }
+
+    fn update_transparency(&mut self, transparent: bool) {
+        self.update_transparency(transparent);
+    }
+
+    fn destroy(&mut self) {
+        self.destroy();
+    }
+
+    fn viewport_size(&self) -> Size<f32> {
+        let extent = self.viewport_size();
+        Size {
+            width: extent.width as f32,
+            height: extent.height as f32,
+        }
+    }
+}
+
 impl BladeRenderer {
     pub fn new<I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle>(
         context: &BladeContext,
@@ -453,7 +487,7 @@ impl BladeRenderer {
         }
     }
 
-    pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
+    fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
         self.update_drawable_size_impl(size, false);
     }
 
@@ -464,7 +498,7 @@ impl BladeRenderer {
         any(target_os = "macos", target_os = "linux", target_os = "freebsd"),
         allow(dead_code)
     )]
-    pub fn update_drawable_size_even_if_unchanged(&mut self, size: Size<DevicePixels>) {
+    fn update_drawable_size_even_if_unchanged(&mut self, size: Size<DevicePixels>) {
         self.update_drawable_size_impl(size, true);
     }
 
@@ -512,7 +546,7 @@ impl BladeRenderer {
         }
     }
 
-    pub fn update_transparency(&mut self, transparent: bool) {
+    fn update_transparency(&mut self, transparent: bool) {
         if transparent != self.surface_config.transparent {
             self.wait_for_gpu();
             self.surface_config.transparent = transparent;
@@ -531,16 +565,16 @@ impl BladeRenderer {
         any(target_os = "macos", feature = "wayland", target_os = "windows"),
         allow(dead_code)
     )]
-    pub fn viewport_size(&self) -> gpu::Extent {
+    fn viewport_size(&self) -> gpu::Extent {
         self.surface_config.size
     }
 
-    pub fn sprite_atlas(&self) -> &Arc<BladeAtlas> {
+    fn sprite_atlas(&self) -> &Arc<BladeAtlas> {
         &self.atlas
     }
 
     #[cfg_attr(target_os = "macos", allow(dead_code))]
-    pub fn gpu_specs(&self) -> GpuSpecs {
+    fn gpu_specs(&self) -> GpuSpecs {
         let info = self.gpu.device_information();
 
         GpuSpecs {
@@ -552,12 +586,12 @@ impl BladeRenderer {
     }
 
     #[cfg(target_os = "macos")]
-    pub fn layer(&self) -> metal::MetalLayer {
+    fn layer(&self) -> metal::MetalLayer {
         unsafe { foreign_types::ForeignType::from_ptr(self.layer_ptr()) }
     }
 
     #[cfg(target_os = "macos")]
-    pub fn layer_ptr(&self) -> *mut metal::CAMetalLayer {
+    fn layer_ptr(&self) -> *mut metal::CAMetalLayer {
         objc2::rc::Retained::as_ptr(&self.surface.metal_layer()) as *mut _
     }
 
@@ -622,7 +656,7 @@ impl BladeRenderer {
         }
     }
 
-    pub fn destroy(&mut self) {
+    fn destroy(&mut self) {
         self.wait_for_gpu();
         self.atlas.destroy();
         self.gpu.destroy_sampler(self.atlas_sampler);
@@ -641,7 +675,7 @@ impl BladeRenderer {
         }
     }
 
-    pub fn draw(&mut self, scene: &Scene) {
+    fn draw(&mut self, scene: &Scene) {
         self.command_encoder.start();
         self.atlas.before_frame(&mut self.command_encoder);
 

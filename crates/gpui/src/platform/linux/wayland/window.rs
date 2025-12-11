@@ -6,7 +6,6 @@ use std::{
     sync::Arc,
 };
 
-use blade_graphics as gpu;
 use collections::HashMap;
 use futures::channel::oneshot::Receiver;
 
@@ -28,15 +27,15 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 use crate::{
     AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
     PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowControls, WindowDecorations, WindowParams,
-    layer_shell::LayerShellNotSupportedError, px, size,
+    ResizeEdge, Size, SurfaceConfig, Tiling, WaylandClientStatePtr, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
+    WindowParams, layer_shell::LayerShellNotSupportedError, px, size,
 };
 use crate::{
     Capslock,
     platform::{
-        PlatformAtlas, PlatformInputHandler, PlatformWindow,
-        blade::{BladeContext, BladeRenderer, BladeSurfaceConfig},
+        PlatformAtlas, PlatformInputHandler, PlatformRenderer, PlatformRendererContext,
+        PlatformWindow, Renderer, RendererContext,
         linux::wayland::{display::WaylandDisplay, serial::SerialKind},
     },
 };
@@ -95,7 +94,7 @@ pub struct WaylandWindowState {
     outputs: HashMap<ObjectId, Output>,
     display: Option<(ObjectId, Output)>,
     globals: Globals,
-    renderer: BladeRenderer,
+    renderer: Renderer,
     bounds: Bounds<Pixels>,
     scale: f32,
     input_handler: Option<PlatformInputHandler>,
@@ -286,7 +285,7 @@ impl WaylandWindowState {
         viewport: Option<wp_viewport::WpViewport>,
         client: WaylandClientStatePtr,
         globals: Globals,
-        gpu_context: &BladeContext,
+        gpu_context: &RendererContext,
         options: WindowParams,
     ) -> anyhow::Result<Self> {
         let renderer = {
@@ -299,15 +298,12 @@ impl WaylandWindowState {
                     .display_ptr()
                     .cast::<c_void>(),
             };
-            let config = BladeSurfaceConfig {
-                size: gpu::Extent {
-                    width: options.bounds.size.width.0 as u32,
-                    height: options.bounds.size.height.0 as u32,
-                    depth: 1,
-                },
-                transparent: true,
+            let config = SurfaceConfig {
+                width: options.bounds.size.width.0,
+                height: options.bounds.size.height.0,
+                is_transparent: true,
             };
-            BladeRenderer::new(gpu_context, &raw_window, config)?
+            gpu_context.create_renderer(&raw_window, config)?
         };
 
         if let WaylandSurfaceState::Xdg(ref xdg_state) = surface_state {
@@ -444,7 +440,7 @@ impl WaylandWindow {
     pub fn new(
         handle: AnyWindowHandle,
         globals: Globals,
-        gpu_context: &BladeContext,
+        gpu_context: &RendererContext,
         client: WaylandClientStatePtr,
         params: WindowParams,
         appearance: WindowAppearance,

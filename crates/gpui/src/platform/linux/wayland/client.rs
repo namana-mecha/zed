@@ -76,13 +76,11 @@ use crate::{
     FileDropEvent, ForegroundExecutor, KeyDownEvent, KeyUpEvent, Keystroke, LinuxCommon,
     LinuxKeyboardLayout, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent,
     MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, PlatformDisplay,
-    PlatformInput, PlatformKeyboardLayout, Point, ResultExt as _, SCROLL_LINES, ScrollDelta,
-    ScrollWheelEvent, Size, TouchPhase, WindowParams, point, px, size,
+    PlatformInput, PlatformKeyboardLayout, PlatformRendererContext, Point, ResultExt as _,
+    SCROLL_LINES, ScrollDelta, ScrollWheelEvent, Size, TouchPhase, WindowParams,
+    platform::RendererContext, point, px, size,
 };
-use crate::{
-    LinuxDispatcher, RunnableVariant, TaskTiming,
-    platform::{PlatformWindow, blade::BladeContext},
-};
+use crate::{LinuxDispatcher, RunnableVariant, TaskTiming, platform::PlatformWindow};
 use crate::{
     SharedString,
     platform::linux::{
@@ -199,7 +197,7 @@ pub struct Output {
 pub(crate) struct WaylandClientState {
     serial_tracker: SerialTracker,
     globals: Globals,
-    gpu_context: BladeContext,
+    gpu_context: RendererContext,
     wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
     wl_pointer: Option<wl_pointer::WlPointer>,
     wl_keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -532,7 +530,7 @@ impl WaylandClient {
             .unwrap();
 
         // This could be unified with the notification handling in zed/main:fail_to_open_window.
-        let gpu_context = BladeContext::new().notify_err("Unable to init GPU context");
+        let gpu_context = RendererContext::new().notify_err("Unable to init GPU context");
 
         let seat = seat.unwrap();
         let globals = Globals::new(
