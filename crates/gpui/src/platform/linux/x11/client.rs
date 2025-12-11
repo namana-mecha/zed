@@ -1,7 +1,7 @@
 use crate::{
-    Capslock, LinuxDispatcher, ResultExt as _, RunnableVariant, TaskTiming,
-    platform::RendererContext, xcb_flush,
- PlatformRendererContext};
+    Capslock, LinuxDispatcher, PlatformRendererContext, ResultExt as _, RunnableVariant,
+    TaskTiming, platform::RendererContext, xcb_flush,
+};
 use anyhow::{Context as _, anyhow};
 use ashpd::WindowIdentifier;
 use calloop::{
@@ -53,7 +53,6 @@ use super::{
 
 use crate::platform::{
     LinuxCommon, PlatformWindow,
-    blade::BladeContext,
     linux::{
         DEFAULT_CURSOR_ICON_NAME, LinuxClient, get_xkb_compose_state, is_within_click_distance,
         log_cursor_icon_warning, open_uri_internal,
@@ -180,7 +179,7 @@ pub struct X11ClientState {
     pub(crate) last_location: Point<Pixels>,
     pub(crate) current_count: usize,
 
-    gpu_context: BladeContext,
+    gpu_context: RendererContext,
 
     pub(crate) scale_factor: f32,
 

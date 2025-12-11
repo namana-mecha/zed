@@ -7231,11 +7231,13 @@ dependencies = [
  "flume",
  "foreign-types 0.5.0",
  "futures 0.3.31",
+ "glow",
  "gpui_macros",
  "http_client",
  "image",
  "inventory",
  "itertools 0.14.0",
+ "khronos-egl",
  "libc",
  "log",
  "lyon",
@@ -7283,6 +7285,7 @@ dependencies = [
  "wayland-backend",
  "wayland-client",
  "wayland-cursor",
+ "wayland-egl",
  "wayland-protocols 0.31.2",
  "wayland-protocols-plasma",
  "wayland-protocols-wlr",
@@ -8668,6 +8671,7 @@ checksum = "6aae1df220ece3c0ada96b8153459b67eebe9ae9212258bb0134ae60416fdf76"
 dependencies = [
  "libc",
  "libloading",
+ "pkg-config",
 ]
 
 [[package]]
@@ -18790,6 +18794,16 @@ dependencies = [
  "rustix 1.1.2",
  "wayland-client",
  "xcursor",
+]
+
+[[package]]
+name = "wayland-egl"
+version = "0.32.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d36232ee23ba3ea34a6835d68ca1af91d3ca3d6eddcf9c7147c4e0e66901b9fd"
+dependencies = [
+ "wayland-backend",
+ "wayland-sys",
 ]
 
 [[package]]
