@@ -33,6 +33,7 @@ pub(crate) struct Scene {
     pub(crate) monochrome_sprites: Vec<MonochromeSprite>,
     pub(crate) polychrome_sprites: Vec<PolychromeSprite>,
     pub(crate) surfaces: Vec<PaintSurface>,
+    pub(crate) changed_bounds: Option<Bounds<ScaledPixels>>,
 }
 
 impl Scene {
@@ -48,6 +49,7 @@ impl Scene {
         self.monochrome_sprites.clear();
         self.polychrome_sprites.clear();
         self.surfaces.clear();
+        self.changed_bounds = None;
     }
 
     pub fn len(&self) -> usize {
@@ -130,6 +132,65 @@ impl Scene {
         }
     }
 
+    pub fn compute_changed_bounds(&mut self, prev_scene: &Scene) {
+        use similar::{ChangeTag, TextDiff};
+
+        let prev_str = prev_scene
+            .paint_operations
+            .iter()
+            .map(|op| format!("{:?}", op))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let curr_str = self
+            .paint_operations
+            .iter()
+            .map(|op| format!("{:?}", op))
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        let diff = TextDiff::from_lines(&prev_str, &curr_str);
+
+        let mut changed_bounds: Option<Bounds<ScaledPixels>> = None;
+        let mut curr_idx = 0;
+        let mut prev_idx = 0;
+
+        for change in diff.iter_all_changes() {
+            match change.tag() {
+                ChangeTag::Delete => {
+                    if let Some(PaintOperation::Primitive(prim)) =
+                        prev_scene.paint_operations.get(prev_idx)
+                    {
+                        let bounds = prim.bounds();
+                        changed_bounds = Some(match changed_bounds {
+                            None => *bounds,
+                            Some(b) => b.union(&bounds),
+                        });
+                    }
+                    prev_idx += 1;
+                }
+                ChangeTag::Insert => {
+                    if let Some(PaintOperation::Primitive(prim)) =
+                        self.paint_operations.get(curr_idx)
+                    {
+                        let bounds = prim.bounds();
+                        changed_bounds = Some(match changed_bounds {
+                            None => *bounds,
+                            Some(b) => b.union(&bounds),
+                        });
+                    }
+                    curr_idx += 1;
+                }
+                ChangeTag::Equal => {
+                    curr_idx += 1;
+                    prev_idx += 1;
+                }
+            }
+        }
+
+        self.changed_bounds = changed_bounds;
+    }
+
     pub fn finish(&mut self) {
         self.shadows.sort_by_key(|shadow| shadow.order);
         self.quads.sort_by_key(|quad| quad.order);
@@ -200,13 +261,14 @@ pub(crate) enum PrimitiveKind {
     Surface,
 }
 
+#[derive(Debug)]
 pub(crate) enum PaintOperation {
     Primitive(Primitive),
     StartLayer(Bounds<ScaledPixels>),
     EndLayer,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub(crate) enum Primitive {
     Shadow(Shadow),
     Quad(Quad),

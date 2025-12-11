@@ -2048,6 +2048,10 @@ impl Window {
         self.text_system().finish_frame();
         self.next_frame.finish(&mut self.rendered_frame);
 
+        self.next_frame
+            .scene
+            .compute_changed_bounds(&self.rendered_frame.scene);
+
         self.invalidator.set_phase(DrawPhase::Focus);
         let previous_focus_path = self.rendered_frame.focus_path();
         let previous_window_active = self.rendered_frame.window_active;

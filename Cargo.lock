@@ -7380,6 +7380,7 @@ dependencies = [
  "impellers",
  "inventory",
  "itertools 0.14.0",
+ "khronos-egl",
  "libc",
  "log",
  "lyon",
@@ -7409,6 +7410,7 @@ dependencies = [
  "semantic_version",
  "serde",
  "serde_json",
+ "similar",
  "slotmap",
  "smallvec",
  "smol",
@@ -8811,6 +8813,7 @@ checksum = "6aae1df220ece3c0ada96b8153459b67eebe9ae9212258bb0134ae60416fdf76"
 dependencies = [
  "libc",
  "libloading",
+ "pkg-config",
 ]
 
 [[package]]
@@ -15718,6 +15721,12 @@ name = "simdutf8"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
+
+[[package]]
+name = "similar"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "bbbb5d9659141646ae647b42fe094daf6c6192d1620870b449d9557f748b2daa"
 
 [[package]]
 name = "simple_asn1"

@@ -1,11 +1,12 @@
 use std::{ffi::CString, num::NonZeroU32};
 
+use glow::HasContext;
 use glutin::{
     config::{ConfigTemplateBuilder, GlConfig},
     context::{ContextApi, ContextAttributesBuilder, PossiblyCurrentGlContext as _, Version},
-    display::GetGlDisplay,
+    display::{AsRawDisplay, GetGlDisplay},
     prelude::{GlDisplay, NotCurrentGlContext as _},
-    surface::{GlSurface, SurfaceAttributesBuilder, WindowSurface},
+    surface::{AsRawSurface, GlSurface, SurfaceAttributesBuilder, WindowSurface},
 };
 use impellers::{
     BlendMode, ClipOperation, Color, ColorFilter, ColorMatrix, ColorSource, DisplayListBuilder,
@@ -29,6 +30,11 @@ pub struct ImpellerRenderer {
     #[allow(dead_code)]
     glow_context: glow::Context,
     transparent: bool,
+    drawable_size: (u32, u32),
+    // Texture for preserving undamaged regions
+    preserved_texture: Option<impellers::Texture>,
+    // GL texture for capturing framebuffer
+    preserved_gl_texture: Option<glow::NativeTexture>,
 }
 impl ImpellerRenderer {
     pub fn new<I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle>(
@@ -101,6 +107,39 @@ impl ImpellerRenderer {
 
         let gl_surface = unsafe { gl_display.create_window_surface(&gl_config, &attrs)? };
 
+        // Set EGL surface to preserve buffer contents for damage tracking
+        #[cfg(feature = "linux-impeller")]
+        if let glutin::surface::Surface::Egl(ref egl_surface) = gl_surface {
+            use glutin::display::RawDisplay;
+            use glutin::surface::RawSurface;
+
+            let raw_display = egl_surface.display().raw_display();
+            let raw_surface = egl_surface.raw_surface();
+
+            if let (RawDisplay::Egl(display_ptr), RawSurface::Egl(surface_ptr)) =
+                (raw_display, raw_surface)
+            {
+                unsafe {
+                    use khronos_egl as egl;
+
+                    let display = egl::Display::from_ptr(display_ptr as *mut _);
+                    let surface = egl::Surface::from_ptr(surface_ptr as *mut _);
+
+                    if let Err(e) = egl::API.surface_attrib(
+                        display,
+                        surface,
+                        egl::SWAP_BEHAVIOR as i32,
+                        egl::BUFFER_PRESERVED as i32,
+                    ) {
+                        log::warn!(
+                            "Failed to set EGL_BUFFER_PRESERVED - this config may not support it: {:?}",
+                            e
+                        );
+                    }
+                }
+            }
+        }
+
         let gl_context = not_current_gl_context.make_current(&gl_surface)?;
         let mut impeller_context: impellers::Context = unsafe {
             impellers::Context::new_opengl_es(|s| {
@@ -139,6 +178,9 @@ impl ImpellerRenderer {
             gl_surface,
             framebuffer: Some(framebuffer),
             transparent: false,
+            drawable_size: (config.0.max(1), config.1.max(1)),
+            preserved_texture: None,
+            preserved_gl_texture: None,
         })
     }
 }
@@ -146,6 +188,9 @@ impl PlatformRenderer for ImpellerRenderer {
     type RenderParams = (u32, u32);
 
     fn draw(&mut self, scene: &crate::Scene) {
+        if let Some(changed_bounds) = scene.changed_bounds {
+            println!("{:?}", changed_bounds);
+        };
         // Make this context current before rendering
         // This is critical for multi-window support - each window has its own GL context
         // and we need to ensure the correct context is active before rendering
@@ -153,6 +198,19 @@ impl PlatformRenderer for ImpellerRenderer {
             self.gl_context
                 .make_current(&self.gl_surface)
                 .expect("Failed to make GL context current");
+        }
+
+        // Enable scissor test for damage tracking to restrict rendering to changed region
+        if let Some(changed_bounds) = scene.changed_bounds {
+            unsafe {
+                self.glow_context.enable(glow::SCISSOR_TEST);
+                self.glow_context.scissor(
+                    changed_bounds.origin.x.0 as i32,
+                    changed_bounds.origin.y.0 as i32,
+                    changed_bounds.size.width.0 as i32,
+                    changed_bounds.size.height.0 as i32,
+                );
+            }
         }
 
         let mut builder = DisplayListBuilder::new(None);
@@ -164,11 +222,56 @@ impl PlatformRenderer for ImpellerRenderer {
         } else {
             paint.set_color(Color::BLACKBERRY);
         }
-        builder.draw_paint(&paint);
+
+        if let Some(ref texture) = self.preserved_texture {
+            let full_rect = Rect::new(
+                Point::new(0.0, 0.0),
+                Size::new(self.drawable_size.0 as f32, self.drawable_size.1 as f32),
+            );
+
+            builder.save();
+            builder.translate(0.0, self.drawable_size.1 as f32);
+            builder.scale(1.0, -1.0);
+
+            builder.draw_texture_rect(
+                texture,
+                &full_rect,
+                &full_rect,
+                TextureSampling::Linear,
+                None,
+            );
+
+            builder.restore();
+        } else {
+            builder.draw_paint(&paint);
+        }
+        if let Some(changed_bounds) = scene.changed_bounds {
+            builder.save();
+            let clip_rect = Rect::new(
+                Point::new(changed_bounds.origin.x.0, changed_bounds.origin.y.0),
+                Size::new(changed_bounds.size.width.0, changed_bounds.size.height.0),
+            );
+            let mut path_builder = PathBuilder::default();
+            path_builder.add_rect(&clip_rect);
+            let clip_path = path_builder.take_path_new(FillType::NonZero);
+            builder.clip_path(&clip_path, ClipOperation::Intersect);
+
+            // Clear the damaged region with background
+            builder.draw_rect(&clip_rect, &paint);
+        } else {
+            builder.draw_paint(&paint);
+        }
+
         for batch in scene.batches() {
             match batch {
                 PrimitiveBatch::Quads(quads) => {
                     for q in quads.iter() {
+                        if let Some(changed_bounds) = scene.changed_bounds.as_ref() {
+                            if !q.bounds.intersects(changed_bounds) {
+                                continue;
+                            }
+                        }
+
                         let origin = q.bounds.origin;
                         let size = q.bounds.size;
 
@@ -564,6 +667,11 @@ impl PlatformRenderer for ImpellerRenderer {
 
                     if let Some(texture) = texture {
                         for sprite in sprites.iter() {
+                            if let Some(changed_bounds) = scene.changed_bounds.as_ref() {
+                                if !sprite.bounds.intersects(changed_bounds) {
+                                    continue;
+                                }
+                            };
                             let origin = sprite.bounds.origin;
                             let size = sprite.bounds.size;
 
@@ -639,7 +747,6 @@ impl PlatformRenderer for ImpellerRenderer {
                             }
                         }
                     } else {
-                        // Fallback: draw colored rectangles when texture is not available
                         for sprite in sprites.iter() {
                             let origin = sprite.bounds.origin;
                             let size = sprite.bounds.size;
@@ -671,6 +778,11 @@ impl PlatformRenderer for ImpellerRenderer {
 
                     if let Some(texture) = texture {
                         for sprite in sprites.iter() {
+                            if let Some(changed_bounds) = scene.changed_bounds.as_ref() {
+                                if !sprite.bounds.intersects(changed_bounds) {
+                                    continue;
+                                }
+                            };
                             let origin = sprite.bounds.origin;
                             let size = sprite.bounds.size;
 
@@ -794,6 +906,11 @@ impl PlatformRenderer for ImpellerRenderer {
                 PrimitiveBatch::Surfaces(_paint_surfaces) => {}
             }
         }
+
+        if scene.changed_bounds.is_some() {
+            builder.restore();
+        }
+
         if self.framebuffer.is_none() {
             return;
         }
@@ -802,9 +919,154 @@ impl PlatformRenderer for ImpellerRenderer {
             .expect("Didn't have framebuffer while drawing.")
             .draw_display_list(&builder.build().unwrap())
             .unwrap();
-        self.gl_surface
-            .swap_buffers(&self.gl_context)
-            .expect("Failed to swap buffers");
+
+        let width = self.drawable_size.0;
+        let height = self.drawable_size.1;
+
+        unsafe {
+            use glow::HasContext;
+
+            // Create or reuse GL texture for framebuffer copy
+            let gl_texture = if let Some(existing_texture) = self.preserved_gl_texture {
+                existing_texture
+            } else {
+                let new_texture = self
+                    .glow_context
+                    .create_texture()
+                    .expect("Failed to create GL texture");
+
+                // Bind and initialize the texture with proper storage
+                self.glow_context
+                    .bind_texture(glow::TEXTURE_2D, Some(new_texture));
+                self.glow_context.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_MIN_FILTER,
+                    glow::LINEAR as i32,
+                );
+                self.glow_context.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_MAG_FILTER,
+                    glow::LINEAR as i32,
+                );
+                self.glow_context.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_WRAP_S,
+                    glow::CLAMP_TO_EDGE as i32,
+                );
+                self.glow_context.tex_parameter_i32(
+                    glow::TEXTURE_2D,
+                    glow::TEXTURE_WRAP_T,
+                    glow::CLAMP_TO_EDGE as i32,
+                );
+
+                // Allocate texture storage
+                self.glow_context.tex_image_2d(
+                    glow::TEXTURE_2D,
+                    0,
+                    glow::RGBA as i32,
+                    width as i32,
+                    height as i32,
+                    0,
+                    glow::RGBA,
+                    glow::UNSIGNED_BYTE,
+                    glow::PixelUnpackData::Slice(None),
+                );
+
+                self.glow_context.bind_texture(glow::TEXTURE_2D, None);
+                self.preserved_gl_texture = Some(new_texture);
+                new_texture
+            };
+
+            // Bind texture and copy framebuffer to it using GPU (avoids CPU transfer)
+            self.glow_context
+                .bind_texture(glow::TEXTURE_2D, Some(gl_texture));
+            self.glow_context.copy_tex_sub_image_2d(
+                glow::TEXTURE_2D,
+                0,
+                0,
+                0,
+                0,
+                0,
+                width as i32,
+                height as i32,
+            );
+
+            // Read pixels from texture to create Impeller texture
+            // This is faster than reading from framebuffer due to caching
+            let pixel_count = (width * height * 4) as usize;
+            let mut pixels = vec![0u8; pixel_count];
+
+            // Note: get_tex_image may not be available in all GLES contexts
+            // Fall back to creating a temporary FBO if needed
+            let fbo = self
+                .glow_context
+                .create_framebuffer()
+                .expect("Failed to create temporary framebuffer");
+
+            self.glow_context
+                .bind_framebuffer(glow::READ_FRAMEBUFFER, Some(fbo));
+            self.glow_context.framebuffer_texture_2d(
+                glow::READ_FRAMEBUFFER,
+                glow::COLOR_ATTACHMENT0,
+                glow::TEXTURE_2D,
+                Some(gl_texture),
+                0,
+            );
+
+            self.glow_context.read_pixels(
+                0,
+                0,
+                width as i32,
+                height as i32,
+                glow::RGBA,
+                glow::UNSIGNED_BYTE,
+                glow::PixelPackData::Slice(Some(&mut pixels)),
+            );
+
+            self.glow_context.delete_framebuffer(fbo);
+            self.glow_context
+                .bind_framebuffer(glow::READ_FRAMEBUFFER, None);
+
+            if let Ok(texture) = self
+                .impeller_context
+                .create_texture_with_rgba8(&pixels, width, height)
+            {
+                self.preserved_texture = Some(texture);
+            }
+
+            self.glow_context.bind_texture(glow::TEXTURE_2D, None);
+        }
+
+        // Disable scissor test after rendering
+        if scene.changed_bounds.is_some() {
+            unsafe {
+                self.glow_context.disable(glow::SCISSOR_TEST);
+            }
+        }
+
+        if let Some(changed_bounds) = scene.changed_bounds
+            && false
+        {
+            if let glutin::surface::Surface::Egl(surface) = &self.gl_surface {
+                if let glutin::context::PossiblyCurrentContext::Egl(context) = &self.gl_context {
+                    surface
+                        .swap_buffers_with_damage(
+                            context,
+                            &[glutin::surface::Rect {
+                                x: changed_bounds.origin.x.0 as i32,
+                                y: changed_bounds.origin.y.0 as i32,
+                                width: changed_bounds.size.width.0 as i32,
+                                height: changed_bounds.size.height.0 as i32,
+                            }],
+                        )
+                        .expect("Failed to swap buffers");
+                }
+            }
+        } else {
+            self.gl_surface
+                .swap_buffers(&self.gl_context)
+                .expect("Failed to swap buffers");
+        }
     }
 
     fn sprite_atlas(&self) -> std::sync::Arc<dyn crate::PlatformAtlas> {
@@ -828,21 +1090,33 @@ impl PlatformRenderer for ImpellerRenderer {
                 .expect("Failed to make GL context current");
         }
 
+        let width = (size.width.0 as u32).max(1);
+        let height = (size.height.0 as u32).max(1);
+
+        self.drawable_size = (width, height);
+
         self.gl_surface.resize(
             &self.gl_context,
-            NonZeroU32::new((size.width.0 as u32).max(1)).unwrap(),
-            NonZeroU32::new((size.height.0 as u32).max(1)).unwrap(),
+            NonZeroU32::new(width).unwrap(),
+            NonZeroU32::new(height).unwrap(),
         );
         self.framebuffer = unsafe {
             self.impeller_context.wrap_fbo(
                 0,
                 impellers::PixelFormat::RGBA8888,
-                ISize::new(
-                    (size.width.0 as u32).max(1) as i64,
-                    (size.height.0 as u32).max(1) as i64,
-                ),
+                ISize::new(width as i64, height as i64),
             )
         };
+
+        // Clear preserved textures since size changed
+        self.preserved_texture = None;
+        if let Some(gl_texture) = self.preserved_gl_texture.take() {
+            unsafe {
+                use glow::HasContext;
+                self.glow_context.delete_texture(gl_texture);
+            }
+        }
+
         log::debug!("Updated drawable size: {:?}", size);
     }
     fn update_transparency(&mut self, transparent: bool) {
@@ -854,5 +1128,13 @@ impl PlatformRenderer for ImpellerRenderer {
 
     fn destroy(&mut self) {
         self.framebuffer = None;
+        self.preserved_texture = None;
+
+        if let Some(gl_texture) = self.preserved_gl_texture.take() {
+            unsafe {
+                use glow::HasContext;
+                self.glow_context.delete_texture(gl_texture);
+            }
+        }
     }
 }
