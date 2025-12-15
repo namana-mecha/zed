@@ -1,19 +1,26 @@
-use crate::{PlatformRenderer, platform::gl::gl_atlas::GlAtlas};
-use glow::HasContext;
-use khronos_egl as egl;
-#[cfg(target_os = "linux")]
-use raw_window_handle::RawDisplayHandle;
-use raw_window_handle::RawWindowHandle;
-use wayland_egl::WlEglSurface;
+use crate::{Bounds, PlatformRenderer, ScaledPixels, platform::gl::gl_atlas::GlAtlas};
+use femtovg::{Canvas, Color, renderer::OpenGl};
+
+use glutin::{
+    config::{ConfigTemplateBuilder, GlConfig},
+    context::{
+        ContextApi, ContextAttributesBuilder, NotCurrentGlContext, PossiblyCurrentContext, Version,
+    },
+    display::{GetGlDisplay, GlDisplay},
+    prelude::*,
+    surface::{Surface as GlutinSurface, SurfaceAttributesBuilder, WindowSurface},
+};
+use std::num::NonZeroU32;
+
+mod monochrome_sprite;
+mod quad;
 
 pub struct GlRenderer {
     atlas: std::sync::Arc<GlAtlas>,
-    gl: glow::Context,
-    egl: egl::Instance<egl::Static>,
-    egl_context: egl::Context,
-    egl_display: egl::Display,
-    egl_surface: egl::Surface,
-    wl_egl_surface: WlEglSurface,
+    pub canvas: Canvas<OpenGl>,
+    pub surface: GlutinSurface<WindowSurface>,
+    pub context: PossiblyCurrentContext,
+    previous_bounds: Option<Bounds<ScaledPixels>>,
 }
 
 impl GlRenderer {
@@ -21,139 +28,115 @@ impl GlRenderer {
         window: &I,
         surface_config: crate::SurfaceConfig,
     ) -> anyhow::Result<Self> {
-        let egl = egl::Instance::new(egl::Static);
+        let display_handle = window
+            .display_handle()
+            .expect("Couldn't get display handle")
+            .as_raw();
 
-        let display_handle = if let Ok(display_handle) = window.display_handle() {
-            display_handle.as_raw()
-        } else {
-            return Err(anyhow::anyhow!("Could not get display handle"));
-        };
-
-        let native_display = match display_handle {
-            RawDisplayHandle::Wayland(handle) => handle.display.as_ptr(),
-            _ => return Err(anyhow::anyhow!("Unsupported display handle")),
-        };
-        let egl_display = unsafe { egl.get_display(native_display) }
-            .ok_or(anyhow::anyhow!("Failed to get EGL display"))?;
-
-        let (major, minor) = egl.initialize(egl_display)?;
-        log::info!("EGL version: {}.{}", major, minor);
-
-        // Choose config
-        let config_attribs = [
-            egl::SURFACE_TYPE,
-            egl::WINDOW_BIT,
-            egl::RENDERABLE_TYPE,
-            egl::OPENGL_ES2_BIT,
-            egl::RED_SIZE,
-            8,
-            egl::GREEN_SIZE,
-            8,
-            egl::BLUE_SIZE,
-            8,
-            egl::ALPHA_SIZE,
-            8,
-            egl::DEPTH_SIZE,
-            24,
-            egl::NONE,
-        ];
-
-        let config = egl
-            .choose_first_config(egl_display, &config_attribs)?
-            .ok_or(anyhow::anyhow!(
-                "Couldn't find suitable config for the window!"
-            ))?;
-
-        // Get native window handle
-        let window_handle = if let Ok(window_handle) = window.window_handle() {
-            window_handle.as_raw()
-        } else {
-            return Err(anyhow::anyhow!("Could not get window handle"));
-        };
-        let wl_surface = match window_handle {
-            RawWindowHandle::Wayland(handle) => handle.surface.as_ptr(),
-            _ => return Err(anyhow::anyhow!("Expected Wayland window")),
-        };
-
-        // Create wl_egl_window - this is required for Wayland
-        // SAFETY: wl_surface pointer is valid and we keep wl_egl_surface alive
-        let wl_egl_surface = unsafe {
-            WlEglSurface::new_from_raw(
-                wl_surface as *mut _,
-                surface_config.width as i32,
-                surface_config.height as i32,
+        let display = unsafe {
+            glutin::display::Display::new(
+                display_handle,
+                glutin::display::DisplayApiPreference::Egl,
             )?
         };
 
-        // Create EGL window surface using the wl_egl_window pointer
-        let egl_surface = unsafe {
-            egl.create_window_surface(
-                egl_display,
-                config,
-                wl_egl_surface.ptr() as egl::NativeWindowType,
-                None,
-            )?
+        let template = ConfigTemplateBuilder::new().with_alpha_size(8);
+
+        let config = unsafe { display.find_configs(template.build())? }
+            .find(|c| c.depth_size() == 24)
+            .ok_or_else(|| anyhow::anyhow!("Couldn't find suitable 24-bit depth config!"))?;
+
+        let window_handle = window
+            .window_handle()
+            .expect("Couldn't get window handle")
+            .as_raw();
+
+        let width = NonZeroU32::new(surface_config.width as u32).unwrap_or(NonZeroU32::MIN);
+        let height = NonZeroU32::new(surface_config.height as u32).unwrap_or(NonZeroU32::MIN);
+
+        let surface_attributes =
+            SurfaceAttributesBuilder::<WindowSurface>::new().build(window_handle, width, height);
+
+        let context_attributes =
+            ContextAttributesBuilder::new().build(Some(window.window_handle().unwrap().as_raw()));
+
+        // Since glutin by default tries to create OpenGL core context, which may not be
+        // present we should try gles.
+        let fallback_context_attributes = ContextAttributesBuilder::new()
+            .with_context_api(ContextApi::Gles(None))
+            .build(Some(window.window_handle().unwrap().as_raw()));
+
+        // There are also some old devices that support neither modern OpenGL nor GLES.
+        // To support these we can try and create a 2.1 context.
+        let legacy_context_attributes = ContextAttributesBuilder::new()
+            .with_context_api(ContextApi::OpenGl(Some(Version::new(2, 1))))
+            .build(Some(window.window_handle().unwrap().as_raw()));
+
+        // Reuse the uncurrented context from a suspended() call if it exists, otherwise
+        // this is the first time resumed() is called, where the context still
+        // has to be created.
+        let gl_display = config.display();
+
+        let not_current_context = unsafe {
+            gl_display
+                .create_context(&config, &context_attributes)
+                .unwrap_or_else(|_| {
+                    gl_display
+                        .create_context(&config, &fallback_context_attributes)
+                        .unwrap_or_else(|_| {
+                            gl_display
+                                .create_context(&config, &legacy_context_attributes)
+                                .expect("Unable to create GL context")
+                        })
+                })
         };
 
-        // Create OpenGL ES 3.0 context
-        let context_attribs = [
-            egl::CONTEXT_MAJOR_VERSION,
-            2,
-            egl::CONTEXT_MINOR_VERSION,
-            0,
-            egl::NONE,
-        ];
+        let surface = unsafe { gl_display.create_window_surface(&config, &surface_attributes)? };
+        let context = not_current_context.make_current(&surface)?;
 
-        egl.bind_api(egl::OPENGL_ES_API)?;
-        let egl_context = egl.create_context(egl_display, config, None, &context_attribs)?;
-
-        // Make context current
-        egl.make_current(
-            egl_display,
-            Some(egl_surface),
-            Some(egl_surface),
-            Some(egl_context),
-        )?;
-
-        // Create glow context
-        let gl = unsafe {
-            glow::Context::from_loader_function(|s| {
-                egl.get_proc_address(s)
-                    .map(|p| p as *const _)
-                    .unwrap_or(std::ptr::null())
-            })
-        };
-
-        unsafe {
-            let renderer = gl.get_parameter_string(glow::RENDERER);
-            let version = gl.get_parameter_string(glow::VERSION);
-            println!("Renderer: {}", renderer);
-            println!("OpenGL ES version: {}", version);
-        }
+        let renderer =
+            unsafe { OpenGl::new_from_function_cstr(|s| gl_display.get_proc_address(s).cast()) }
+                .expect("Cannot create renderer");
+        let mut canvas = Canvas::new(renderer).expect("Cannot create canvas");
+        canvas.set_size(width.into(), height.into(), 1.0);
 
         Ok(Self {
-            atlas: std::sync::Arc::new(GlAtlas {}),
-            egl,
-            egl_context,
-            egl_display,
-            egl_surface,
-            wl_egl_surface,
-            gl,
+            atlas: std::sync::Arc::new(GlAtlas::new()),
+            canvas,
+            surface,
+            context,
+            previous_bounds: None,
         })
     }
 }
 
 impl PlatformRenderer for GlRenderer {
     fn draw(&mut self, scene: &crate::Scene) {
-        unsafe {
-            self.gl.clear_color(0.0, 0.0, 0.0, 1.0);
-            self.gl
-                .clear(glow::COLOR_BUFFER_BIT | glow::DEPTH_BUFFER_BIT);
+        self.context
+            .make_current(&self.surface)
+            .expect("Couldn't make current");
+        self.canvas.clear_rect(0, 0, 100, 100, Color::white());
+        for batch in scene.batches() {
+            match batch {
+                crate::PrimitiveBatch::Shadows(shadows) => {}
+                crate::PrimitiveBatch::Quads(quads) => self.draw_quads(quads),
+                crate::PrimitiveBatch::Paths(paths) => todo!(),
+                crate::PrimitiveBatch::Underlines(underlines) => todo!(),
+                crate::PrimitiveBatch::MonochromeSprites {
+                    texture_id,
+                    sprites,
+                } => self.draw_monochrome_sprites(sprites),
+                crate::PrimitiveBatch::PolychromeSprites {
+                    texture_id,
+                    sprites,
+                } => todo!(),
+                crate::PrimitiveBatch::Surfaces(paint_surfaces) => todo!(),
+            }
         }
-
-        self.egl
-            .swap_buffers(self.egl_display, self.egl_surface)
-            .expect("swap_buffers failed");
+        self.canvas.flush();
+        self.surface
+            .swap_buffers(&self.context)
+            .expect("Couldn't swap buffers!");
     }
 
     fn sprite_atlas(&self) -> std::sync::Arc<dyn crate::PlatformAtlas> {
@@ -165,25 +148,17 @@ impl PlatformRenderer for GlRenderer {
     }
 
     fn update_drawable_size(&mut self, size: crate::Size<crate::DevicePixels>) {
-        self.wl_egl_surface
-            .resize(size.width.0 as i32, size.height.0 as i32, 0, 0);
-        unsafe {
-            self.gl
-                .viewport(0, 0, size.width.0 as i32, size.height.0 as i32);
-        }
+        let width = NonZeroU32::new(size.width.0 as u32).unwrap_or(NonZeroU32::MIN);
+        let height = NonZeroU32::new(size.height.0 as u32).unwrap_or(NonZeroU32::MIN);
+        self.surface.resize(&self.context, width, height);
+        self.canvas.set_size(width.into(), height.into(), 1.0);
     }
 
     fn update_transparency(&mut self, transparent: bool) {
         println!("TODO: update transparancy to {}", transparent);
     }
 
-    fn destroy(&mut self) {
-        let _ = self.egl.make_current(self.egl_display, None, None, None);
-        let _ = self.egl.destroy_surface(self.egl_display, self.egl_surface);
-        let _ = self.egl.destroy_context(self.egl_display, self.egl_context);
-        let _ = self.egl.terminate(self.egl_display);
-        // wl_egl_surface drops here after EGL cleanup
-    }
+    fn destroy(&mut self) {}
 
     fn viewport_size(&self) -> crate::Size<f32> {
         todo!()
