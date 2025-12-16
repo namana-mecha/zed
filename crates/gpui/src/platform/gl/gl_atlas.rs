@@ -1,17 +1,15 @@
-use std::borrow::Cow;
-
 use collections::FxHashMap;
 use parking_lot::Mutex;
 
-use crate::{AtlasKey, AtlasTextureId, AtlasTile, Bounds, PlatformAtlas, Point, TileId};
+use crate::{AtlasKey, AtlasTextureId, AtlasTile, Bounds, PlatformAtlas, TileId};
 
 pub struct GlAtlasState {
-    tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
-    data_by_key: FxHashMap<AtlasKey, Vec<u8>>,
+    pub(crate) tiles_by_key: FxHashMap<AtlasKey, AtlasTile>,
+    pub(crate) data_by_key: FxHashMap<AtlasKey, Vec<u8>>,
     next_index: u32,
 }
 
-pub struct GlAtlas(Mutex<GlAtlasState>);
+pub struct GlAtlas(pub(crate) Mutex<GlAtlasState>);
 impl GlAtlas {
     pub fn new() -> Self {
         Self(Mutex::new(GlAtlasState {
@@ -19,6 +17,23 @@ impl GlAtlas {
             data_by_key: Default::default(),
             next_index: Default::default(),
         }))
+    }
+
+    pub fn get_texture_data(
+        &self,
+        texture_id: AtlasTextureId,
+    ) -> Option<(Vec<u8>, Bounds<crate::DevicePixels>)> {
+        let lock = self.0.lock();
+
+        // Find the key and tile that matches the texture_id
+        for (key, tile) in lock.tiles_by_key.iter() {
+            if tile.texture_id.index == texture_id.index {
+                if let Some(data) = lock.data_by_key.get(key) {
+                    return Some((data.clone(), tile.bounds));
+                }
+            }
+        }
+        None
     }
 }
 

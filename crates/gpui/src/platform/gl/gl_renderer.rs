@@ -1,5 +1,6 @@
 use crate::{Bounds, PlatformRenderer, ScaledPixels, platform::gl::gl_atlas::GlAtlas};
 use femtovg::{Canvas, Color, renderer::OpenGl};
+use glow::HasContext;
 
 use glutin::{
     config::{ConfigTemplateBuilder, GlConfig},
@@ -11,6 +12,7 @@ use glutin::{
     surface::{Surface as GlutinSurface, SurfaceAttributesBuilder, WindowSurface},
 };
 use std::num::NonZeroU32;
+use std::rc::Rc;
 
 mod monochrome_sprite;
 mod quad;
@@ -20,6 +22,7 @@ pub struct GlRenderer {
     pub canvas: Canvas<OpenGl>,
     pub surface: GlutinSurface<WindowSurface>,
     pub context: PossiblyCurrentContext,
+    pub gl: Rc<glow::Context>,
     previous_bounds: Option<Bounds<ScaledPixels>>,
 }
 
@@ -94,6 +97,14 @@ impl GlRenderer {
         let surface = unsafe { gl_display.create_window_surface(&config, &surface_attributes)? };
         let context = not_current_context.make_current(&surface)?;
 
+        let gl = unsafe {
+            glow::Context::from_loader_function(|s| {
+                let s = std::ffi::CString::new(s).unwrap();
+                gl_display.get_proc_address(&s).cast()
+            })
+        };
+        let gl = Rc::new(gl);
+
         let renderer =
             unsafe { OpenGl::new_from_function_cstr(|s| gl_display.get_proc_address(s).cast()) }
                 .expect("Cannot create renderer");
@@ -105,6 +116,7 @@ impl GlRenderer {
             canvas,
             surface,
             context,
+            gl,
             previous_bounds: None,
         })
     }
