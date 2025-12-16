@@ -14,13 +14,19 @@ out vec2 TexCoord;
 
 uniform vec2 screenSize;
 uniform vec4 spriteBounds; // x, y, width, height
+uniform mat2 transformRotationScale;
+uniform vec2 transformTranslation;
 
 void main() {
     // Transform vertex position to sprite bounds
     vec2 pos = spriteBounds.xy + position * spriteBounds.zw;
 
+    // Apply transformation matrix
+    // Note: transpose the rotation_scale matrix (stored row-major in Rust, but GLSL expects column-major)
+    vec2 transformed = transpose(transformRotationScale) * pos + transformTranslation;
+
     // Convert to normalized device coordinates (-1 to 1)
-    vec2 ndc = (pos / screenSize) * 2.0 - 1.0;
+    vec2 ndc = (transformed / screenSize) * 2.0 - 1.0;
     ndc.y = -ndc.y; // Flip Y axis
 
     gl_Position = vec4(ndc, 0.0, 1.0);
@@ -174,6 +180,30 @@ impl MonochromeSpriteRenderer {
                 );
             }
 
+            // Set transformation matrix uniforms
+            if let Some(loc) = gl.get_uniform_location(self.program, "transformRotationScale") {
+                // Matrix is stored row-major in Rust, pass it as-is
+                // GLSL will transpose it in the shader
+                gl.uniform_matrix_2_f32_slice(
+                    Some(&loc),
+                    false, // no transpose here, we do it in shader
+                    &[
+                        sprite.transformation.rotation_scale[0][0],
+                        sprite.transformation.rotation_scale[0][1],
+                        sprite.transformation.rotation_scale[1][0],
+                        sprite.transformation.rotation_scale[1][1],
+                    ],
+                );
+            }
+
+            if let Some(loc) = gl.get_uniform_location(self.program, "transformTranslation") {
+                gl.uniform_2_f32(
+                    Some(&loc),
+                    sprite.transformation.translation[0],
+                    sprite.transformation.translation[1],
+                );
+            }
+
             // Convert HSLA to RGBA
             let color = hsla_to_rgba(
                 sprite.color.h,
@@ -201,8 +231,7 @@ impl MonochromeSpriteRenderer {
 }
 
 impl Drop for MonochromeSpriteRenderer {
-    fn drop(&mut self) {
-    }
+    fn drop(&mut self) {}
 }
 
 fn hsla_to_rgba(h: f32, s: f32, l: f32, a: f32) -> (f32, f32, f32, f32) {
