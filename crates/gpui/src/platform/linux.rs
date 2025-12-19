@@ -61,3 +61,5 @@ pub use wayland::foreign_toplevel_management;
 pub use wayland::layer_shell;
 #[cfg(feature = "wayland")]
 pub use wayland::session_lock;
+#[cfg(feature = "wayland")]
+pub use wayland::input_method;

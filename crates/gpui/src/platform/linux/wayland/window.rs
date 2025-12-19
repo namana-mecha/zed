@@ -1426,6 +1426,16 @@ impl PlatformWindow for WaylandWindow {
         let client_state = client.borrow();
         client_state.foreign_toplevels.values().cloned().collect()
     }
+
+    fn get_virtual_keyboard(&self) -> Option<super::input_method::VirtualKeyboardHandle> {
+        let state = self.borrow();
+        state.client.get_virtual_keyboard()
+    }
+
+    fn get_input_method(&self) -> Option<super::input_method::InputMethodHandle> {
+        let state = self.borrow();
+        state.client.get_input_method()
+    }
 }
 
 fn update_window(mut state: RefMut<WaylandWindowState>) {

@@ -69,6 +69,12 @@ use wayland_protocols_wlr::foreign_toplevel::v1::client::{
     zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
 };
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
+use wayland_protocols_misc::zwp_input_method_v2::client::{
+    zwp_input_method_manager_v2, zwp_input_method_v2,
+};
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
+    zwp_virtual_keyboard_manager_v1, zwp_virtual_keyboard_v1,
+};
 use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
 use xkbcommon::xkb::{self, KEYMAP_COMPILE_NO_FLAGS, Keycode};
 
@@ -129,6 +135,9 @@ pub struct Globals {
         Option<zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1>,
     pub blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
+    pub input_method_manager: Option<zwp_input_method_manager_v2::ZwpInputMethodManagerV2>,
+    pub virtual_keyboard_manager:
+        Option<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1>,
     pub executor: ForegroundExecutor,
 }
 
@@ -169,6 +178,8 @@ impl Globals {
             foreign_toplevel_manager: globals.bind(&qh, 1..=3, ()).ok(),
             blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            input_method_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            virtual_keyboard_manager: globals.bind(&qh, 1..=1, ()).ok(),
             executor,
             qh,
         }
@@ -206,7 +217,7 @@ pub struct Output {
 }
 
 pub(crate) struct WaylandClientState {
-    serial_tracker: SerialTracker,
+    pub(crate) serial_tracker: SerialTracker,
     globals: Globals,
     gpu_context: RendererContext,
     wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
@@ -216,6 +227,11 @@ pub(crate) struct WaylandClientState {
     data_device: Option<wl_data_device::WlDataDevice>,
     primary_selection: Option<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1>,
     text_input: Option<zwp_text_input_v3::ZwpTextInputV3>,
+    pub(crate) input_method: Option<zwp_input_method_v2::ZwpInputMethodV2>,
+    pub(crate) virtual_keyboard: Option<zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1>,
+    pub(crate) input_method_active: bool,
+    pub(crate) surrounding_text: Option<(String, u32, u32)>,
+    pub(crate) content_type: (u32, u32),
     pre_edit_text: Option<String>,
     ime_pre_edit: Option<String>,
     composing: bool,
@@ -358,6 +374,26 @@ impl WaylandClientStatePtr {
             bounds.size.height.0 as i32,
         );
         text_input.commit();
+    }
+
+    pub fn get_virtual_keyboard(&self) -> Option<super::input_method::VirtualKeyboardHandle> {
+        let client = self.get_client();
+        let state = client.borrow();
+        if state.virtual_keyboard.is_some() {
+            Some(super::input_method::VirtualKeyboardHandle::new(client.clone()))
+        } else {
+            None
+        }
+    }
+
+    pub fn get_input_method(&self) -> Option<super::input_method::InputMethodHandle> {
+        let client = self.get_client();
+        let state = client.borrow();
+        if state.input_method.is_some() {
+            Some(super::input_method::InputMethodHandle::new(client.clone()))
+        } else {
+            None
+        }
     }
 
     pub fn handle_keyboard_layout_change(&self) {
@@ -613,6 +649,11 @@ impl WaylandClient {
             data_device,
             primary_selection,
             text_input: None,
+            input_method: None,
+            virtual_keyboard: None,
+            input_method_active: false,
+            surrounding_text: None,
+            content_type: (0, 0),
             pre_edit_text: None,
             ime_pre_edit: None,
             composing: false,
@@ -1097,6 +1138,9 @@ delegate_noop!(WaylandClientStatePtr: ignore zxdg_decoration_manager_v1::ZxdgDec
 delegate_noop!(WaylandClientStatePtr: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur_manager::OrgKdeKwinBlurManager);
 delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextInputManagerV3);
+delegate_noop!(WaylandClientStatePtr: ignore zwp_input_method_manager_v2::ZwpInputMethodManagerV2);
+delegate_noop!(WaylandClientStatePtr: ignore zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1);
+delegate_noop!(WaylandClientStatePtr: ignore zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
@@ -1391,6 +1435,18 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                     .text_input_manager
                     .as_ref()
                     .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
+
+                state.input_method = state
+                    .globals
+                    .input_method_manager
+                    .as_ref()
+                    .map(|manager| manager.get_input_method(seat, qh, ()));
+
+                state.virtual_keyboard = state
+                    .globals
+                    .virtual_keyboard_manager
+                    .as_ref()
+                    .map(|manager| manager.create_virtual_keyboard(seat, qh, ()));
 
                 if let Some(wl_keyboard) = &state.wl_keyboard {
                     wl_keyboard.release();
@@ -1718,6 +1774,41 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for WaylandClientStatePtr {
                     drop(state);
                     window.handle_ime(ImeInput::DeleteText);
                 }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        _input_method: &zwp_input_method_v2::ZwpInputMethodV2,
+        event: <zwp_input_method_v2::ZwpInputMethodV2 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let mut state = client.borrow_mut();
+
+        match event {
+            zwp_input_method_v2::Event::Activate => {
+                state.input_method_active = true;
+            }
+            zwp_input_method_v2::Event::Deactivate => {
+                state.input_method_active = false;
+            }
+            zwp_input_method_v2::Event::SurroundingText { text, cursor, anchor } => {
+                state.surrounding_text = Some((text, cursor, anchor));
+            }
+            zwp_input_method_v2::Event::TextChangeCause { .. } => {}
+            zwp_input_method_v2::Event::ContentType { hint, purpose } => {
+                state.content_type = (hint.into(), purpose.into());
+            }
+            zwp_input_method_v2::Event::Done => {}
+            zwp_input_method_v2::Event::Unavailable => {
+                state.input_method_active = false;
             }
             _ => {}
         }

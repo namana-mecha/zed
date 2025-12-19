@@ -91,6 +91,8 @@ pub use linux::foreign_toplevel_management;
 pub use linux::layer_shell;
 #[cfg(all(target_os = "linux", feature = "wayland"))]
 pub use linux::session_lock;
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub use linux::input_method;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use test::{TestDispatcher, TestScreenCaptureSource, TestScreenCaptureStream};
@@ -569,6 +571,20 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
     #[cfg(all(target_os = "linux", feature = "wayland"))]
     fn foreign_toplevels(&self) -> Vec<foreign_toplevel_management::ForeignToplevelHandle> {
         Vec::new()
+    }
+
+    /// Returns a handle to the virtual keyboard protocol.
+    /// This is only available on Wayland with the zwp_virtual_keyboard_v1 protocol.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    fn get_virtual_keyboard(&self) -> Option<input_method::VirtualKeyboardHandle> {
+        None
+    }
+
+    /// Returns a handle to the input method protocol.
+    /// This is only available on Wayland with the zwp_input_method_v2 protocol.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    fn get_input_method(&self) -> Option<input_method::InputMethodHandle> {
+        None
     }
 
     #[cfg(any(test, feature = "test-support"))]
