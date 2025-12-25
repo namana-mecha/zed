@@ -1882,6 +1882,19 @@ impl Window {
         self.platform_window.get_input_method()
     }
 
+    /// Returns whether the input method is currently active.
+    ///
+    /// The input method becomes active when a text input field gains focus in another application,
+    /// and becomes inactive when the text input loses focus. This is useful for virtual keyboards
+    /// to show/hide themselves based on text input activation.
+    ///
+    /// This is only available on Wayland with the zwp_input_method_v2 protocol.
+    /// Returns `false` if the protocol is not supported by the compositor.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn is_input_method_active(&self) -> bool {
+        self.platform_window.is_input_method_active()
+    }
+
     /// Returns the client_inset value by [`Self::set_client_inset`].
     pub fn client_inset(&self) -> Option<Pixels> {
         self.client_inset

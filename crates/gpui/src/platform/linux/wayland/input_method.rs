@@ -1,6 +1,7 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
+use util::ResultExt;
 use wayland_backend::protocol::WEnum;
 
 use super::client::WaylandClientState;
@@ -36,6 +37,8 @@ impl VirtualKeyboardHandle {
         let client = self.client.borrow();
         if let Some(ref vk) = client.virtual_keyboard {
             vk.key(time, key, WEnum::Value(state as u32).into());
+            // Flush to ensure the event is sent immediately
+            client.connection.flush().log_err();
         }
     }
 
@@ -56,6 +59,8 @@ impl VirtualKeyboardHandle {
         let client = self.client.borrow();
         if let Some(ref vk) = client.virtual_keyboard {
             vk.modifiers(mods_depressed, mods_latched, mods_locked, group);
+            // Flush to ensure the event is sent immediately
+            client.connection.flush().log_err();
         }
     }
 }
@@ -89,6 +94,8 @@ impl InputMethodHandle {
         let client = self.client.borrow();
         if let Some(ref im) = client.input_method {
             im.commit_string(text.to_string());
+            // Flush to ensure the event is sent immediately
+            client.connection.flush().log_err();
         }
     }
 
@@ -102,6 +109,8 @@ impl InputMethodHandle {
         let client = self.client.borrow();
         if let Some(ref im) = client.input_method {
             im.set_preedit_string(text.to_string(), cursor_begin, cursor_end);
+            // Flush to ensure the event is sent immediately
+            client.connection.flush().log_err();
         }
     }
 
@@ -114,6 +123,8 @@ impl InputMethodHandle {
         let client = self.client.borrow();
         if let Some(ref im) = client.input_method {
             im.delete_surrounding_text(before_length, after_length);
+            // Flush to ensure the event is sent immediately
+            client.connection.flush().log_err();
         }
     }
 
@@ -127,6 +138,8 @@ impl InputMethodHandle {
                 .serial_tracker
                 .get(super::serial::SerialKind::InputMethod);
             im.commit(serial);
+            // Flush to ensure the event is sent immediately
+            client.connection.flush().log_err();
         }
     }
 

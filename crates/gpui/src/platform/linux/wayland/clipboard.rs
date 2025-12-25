@@ -24,7 +24,7 @@ pub(crate) const FILE_LIST_MIME_TYPE: &str = "text/uri-list";
 pub(crate) const ALLOWED_TEXT_MIME_TYPES: [&str; 2] = ["text/plain;charset=utf-8", "UTF8_STRING"];
 
 pub(crate) struct Clipboard {
-    connection: Connection,
+    pub(crate) connection: Connection,
     loop_handle: LoopHandle<'static, WaylandClientStatePtr>,
     self_mime: String,
 

@@ -218,7 +218,8 @@ pub struct Output {
 
 pub(crate) struct WaylandClientState {
     pub(crate) serial_tracker: SerialTracker,
-    globals: Globals,
+    pub(crate) globals: Globals,
+    pub(crate) connection: Connection,
     gpu_context: RendererContext,
     wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
     wl_pointer: Option<wl_pointer::WlPointer>,
@@ -265,7 +266,7 @@ pub(crate) struct WaylandClientState {
     keyboard_focused_window: Option<WaylandWindowStatePtr>,
     loop_handle: LoopHandle<'static, WaylandClientStatePtr>,
     cursor_style: Option<CursorStyle>,
-    clipboard: Clipboard,
+    pub(crate) clipboard: Clipboard,
     data_offers: Vec<DataOffer<WlDataOffer>>,
     primary_data_offer: Option<DataOffer<ZwpPrimarySelectionOfferV1>>,
     cursor: Cursor,
@@ -394,6 +395,12 @@ impl WaylandClientStatePtr {
         } else {
             None
         }
+    }
+
+    pub fn is_input_method_active(&self) -> bool {
+        let client = self.get_client();
+        let state = client.borrow();
+        state.input_method_active
     }
 
     pub fn handle_keyboard_layout_change(&self) {
@@ -641,6 +648,7 @@ impl WaylandClient {
         let mut state = Rc::new(RefCell::new(WaylandClientState {
             serial_tracker: SerialTracker::new(),
             globals,
+            connection: conn.clone(),
             gpu_context,
             wl_seat: seat,
             wl_pointer: None,
@@ -1513,6 +1521,30 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 };
                 state.keymap_state = Some(xkb::State::new(&keymap));
                 state.compose_state = get_xkb_compose_state(&xkb_context);
+
+                // Send keymap to virtual keyboard if it exists
+                if let Some(ref vk) = state.virtual_keyboard {
+                    let keymap_str = keymap.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1);
+                    use std::ffi::CString;
+                    use std::io::Write;
+                    use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd};
+
+                    let keymap_bytes = keymap_str.as_bytes();
+
+                    // Create memfd using libc
+                    let name = CString::new("keymap").unwrap();
+                    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
+
+                    if fd >= 0 {
+                        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+                        if file.write_all(keymap_bytes).is_ok() && file.flush().is_ok() {
+                            let size = keymap_bytes.len() as u32;
+                            vk.keymap(1, unsafe { BorrowedFd::borrow_raw(file.as_raw_fd()) }, size);
+                            state.connection.flush().log_err();
+                        }
+                    }
+                }
+
                 drop(state);
 
                 this.handle_keyboard_layout_change();

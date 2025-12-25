@@ -587,6 +587,13 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         None
     }
 
+    /// Returns whether the input method is currently active.
+    /// This is only available on Wayland with the zwp_input_method_v2 protocol.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    fn is_input_method_active(&self) -> bool {
+        false
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     fn as_test(&mut self) -> Option<&mut TestWindow> {
         None

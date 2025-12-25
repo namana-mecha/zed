@@ -1436,6 +1436,11 @@ impl PlatformWindow for WaylandWindow {
         let state = self.borrow();
         state.client.get_input_method()
     }
+
+    fn is_input_method_active(&self) -> bool {
+        let state = self.borrow();
+        state.client.is_input_method_active()
+    }
 }
 
 fn update_window(mut state: RefMut<WaylandWindowState>) {
