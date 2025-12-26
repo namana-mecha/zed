@@ -2404,13 +2404,17 @@ impl Interactivity {
                     let long_press_state = long_press_state.clone();
                     move |event: &MouseMoveEvent, phase, window, _cx| {
                         if phase == DispatchPhase::Bubble {
-                            if let Some(state) = long_press_state.borrow().as_ref() {
+                            let should_cancel = if let Some(state) = long_press_state.borrow().as_ref() {
                                 let movement =
                                     (event.position - state.mouse_down.position).magnitude();
-                                if movement > DRAG_THRESHOLD {
-                                    long_press_state.borrow_mut().take();
-                                    window.refresh();
-                                }
+                                movement > DRAG_THRESHOLD
+                            } else {
+                                false
+                            };
+
+                            if should_cancel {
+                                long_press_state.borrow_mut().take();
+                                window.refresh();
                             }
                         }
                     }
@@ -2421,7 +2425,8 @@ impl Interactivity {
                     let long_press_state = long_press_state.clone();
                     move |_: &MouseUpEvent, phase, window, _cx| {
                         if phase == DispatchPhase::Capture {
-                            if long_press_state.borrow().is_some() {
+                            let should_cancel = long_press_state.borrow().is_some();
+                            if should_cancel {
                                 long_press_state.borrow_mut().take();
                                 window.refresh();
                             }
@@ -2432,7 +2437,8 @@ impl Interactivity {
                 // Cancel on MouseExit
                 window.on_mouse_event({
                     move |_: &MouseExitEvent, _phase, window, _cx| {
-                        if long_press_state.borrow().is_some() {
+                        let should_cancel = long_press_state.borrow().is_some();
+                        if should_cancel {
                             long_press_state.borrow_mut().take();
                             window.refresh();
                         }
