@@ -19,11 +19,11 @@ use crate::{
     AbsoluteLength, Action, AnyDrag, AnyElement, AnyTooltip, AnyView, App, Bounds, ClickEvent,
     DispatchPhase, Display, Element, ElementId, Entity, FocusHandle, Global, GlobalElementId,
     Hitbox, HitboxBehavior, HitboxId, InspectorElementId, IntoElement, IsZero, KeyContext,
-    KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent, LayoutId, ModifiersChangedEvent,
-    MouseButton, MouseClickEvent, MouseDownEvent, MouseMoveEvent, MouseUpEvent, Overflow,
-    ParentElement, Pixels, Point, Render, ScrollWheelEvent, SharedString, Size, Style,
-    StyleRefinement, Styled, Task, TooltipId, Visibility, Window, WindowControlArea, point, px,
-    size,
+    KeyDownEvent, KeyUpEvent, KeyboardButton, KeyboardClickEvent, LayoutId, LongPressEvent,
+    ModifiersChangedEvent, MouseButton, MouseClickEvent, MouseDownEvent, MouseExitEvent,
+    MouseMoveEvent, MouseUpEvent, Overflow, ParentElement, Pixels, Point, Render, ScrollWheelEvent,
+    SharedString, Size, Style, StyleRefinement, Styled, Task, TooltipId, Visibility, Window,
+    WindowControlArea, point, px, size,
 };
 use collections::HashMap;
 use refineable::Refineable;
@@ -38,7 +38,7 @@ use std::{
     mem,
     rc::Rc,
     sync::Arc,
-    time::Duration,
+    time::{Duration, Instant},
 };
 use util::ResultExt;
 
@@ -47,6 +47,7 @@ use super::ImageCacheProvider;
 const DRAG_THRESHOLD: f64 = 2.;
 const TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
 const HOVERABLE_TOOLTIP_HIDE_DELAY: Duration = Duration::from_millis(500);
+const LONG_PRESS_DURATION: Duration = Duration::from_millis(500);
 
 /// The styling information for a given group.
 pub struct GroupStyle {
@@ -488,6 +489,39 @@ impl Interactivity {
         self.click_listeners.push(Rc::new(move |event, window, cx| {
             listener(event, window, cx)
         }));
+    }
+
+    /// Register a long press event listener. The listener will be called when the user holds the mouse
+    /// button down for the default duration (500ms) without moving beyond the drag threshold.
+    /// Both long press and click events will fire when the button is held and then released.
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    pub fn on_long_press(
+        &mut self,
+        listener: impl Fn(&LongPressEvent, &mut Window, &mut App) + 'static,
+    ) where
+        Self: Sized,
+    {
+        self.long_press_listeners.push(Rc::new(listener));
+        if self.long_press_duration.is_none() {
+            self.long_press_duration = Some(LONG_PRESS_DURATION);
+        }
+    }
+
+    /// Register a long press event listener with a custom duration. The listener will be called when
+    /// the user holds the mouse button down for the specified duration (in milliseconds) without moving
+    /// beyond the drag threshold.
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    pub fn on_long_press_ms(
+        &mut self,
+        duration_ms: u64,
+        listener: impl Fn(&LongPressEvent, &mut Window, &mut App) + 'static,
+    ) where
+        Self: Sized,
+    {
+        self.long_press_listeners.push(Rc::new(listener));
+        self.long_press_duration = Some(Duration::from_millis(duration_ms));
     }
 
     /// On drag initiation, this callback will be used to create a new view to render the dragged value for a
@@ -1134,6 +1168,37 @@ pub trait StatefulInteractiveElement: InteractiveElement {
         self
     }
 
+    /// Register a long press event listener with the default duration (500ms).
+    /// The fluent API equivalent to [`Interactivity::on_long_press`].
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    fn on_long_press(
+        mut self,
+        listener: impl Fn(&LongPressEvent, &mut Window, &mut App) + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().on_long_press(listener);
+        self
+    }
+
+    /// Register a long press event listener with a custom duration in milliseconds.
+    /// The fluent API equivalent to [`Interactivity::on_long_press_ms`].
+    ///
+    /// See [`Context::listener`](crate::Context::listener) to get access to a view's state from this callback.
+    fn on_long_press_ms(
+        mut self,
+        duration_ms: u64,
+        listener: impl Fn(&LongPressEvent, &mut Window, &mut App) + 'static,
+    ) -> Self
+    where
+        Self: Sized,
+    {
+        self.interactivity().on_long_press_ms(duration_ms, listener);
+        self
+    }
+
     /// On drag initiation, this callback will be used to create a new view to render the dragged value for a
     /// drag and drop operation. This API should also be used as the equivalent of 'on drag start' with
     /// the [`InteractiveElement::on_drag_move`] API.
@@ -1205,6 +1270,9 @@ pub(crate) type ScrollWheelListener =
     Box<dyn Fn(&ScrollWheelEvent, DispatchPhase, &Hitbox, &mut Window, &mut App) + 'static>;
 
 pub(crate) type ClickListener = Rc<dyn Fn(&ClickEvent, &mut Window, &mut App) + 'static>;
+
+pub(crate) type LongPressListener =
+    Rc<dyn Fn(&LongPressEvent, &mut Window, &mut App) + 'static>;
 
 pub(crate) type DragListener =
     Box<dyn Fn(&dyn Any, Point<Pixels>, &mut Window, &mut App) -> AnyView + 'static>;
@@ -1530,6 +1598,8 @@ pub struct Interactivity {
     pub(crate) drop_listeners: Vec<(TypeId, DropListener)>,
     pub(crate) can_drop_predicate: Option<CanDropPredicate>,
     pub(crate) click_listeners: Vec<ClickListener>,
+    pub(crate) long_press_listeners: Vec<LongPressListener>,
+    pub(crate) long_press_duration: Option<Duration>,
     pub(crate) drag_listener: Option<(Arc<dyn Any>, DragListener)>,
     pub(crate) hover_listener: Option<Box<dyn Fn(&bool, &mut Window, &mut App)>>,
     pub(crate) tooltip_builder: Option<TooltipBuilder>,
@@ -2097,6 +2167,8 @@ impl Interactivity {
         let mut drag_listener = mem::take(&mut self.drag_listener);
         let drop_listeners = mem::take(&mut self.drop_listeners);
         let click_listeners = mem::take(&mut self.click_listeners);
+        let long_press_listeners = mem::take(&mut self.long_press_listeners);
+        let long_press_duration = self.long_press_duration.take();
         let can_drop_predicate = mem::take(&mut self.can_drop_predicate);
 
         if !drop_listeners.is_empty() {
@@ -2255,6 +2327,114 @@ impl Interactivity {
                                     listener(&mouse_click, window, cx);
                                 }
                             }
+                        }
+                    }
+                });
+            }
+
+            if !long_press_listeners.is_empty() {
+                let long_press_state = element_state
+                    .long_press_state
+                    .get_or_insert_with(Default::default)
+                    .clone();
+
+                let duration = long_press_duration.unwrap_or(LONG_PRESS_DURATION);
+
+                // Start timer on MouseDown
+                window.on_mouse_event({
+                    let long_press_state = long_press_state.clone();
+                    let long_press_listeners = long_press_listeners.clone();
+                    let hitbox = hitbox.clone();
+                    move |event: &MouseDownEvent, phase, window, cx| {
+                        if phase == DispatchPhase::Bubble
+                            && event.button == MouseButton::Left
+                            && hitbox.is_hovered(window)
+                        {
+                            let start_time = Instant::now();
+                            let mouse_down = event.clone();
+
+                            let task = window.spawn(cx, {
+                                let long_press_state = long_press_state.clone();
+                                let long_press_listeners = long_press_listeners.clone();
+                                async move |cx| {
+                                    cx.background_executor().timer(duration).await;
+
+                                    // Fire if not cancelled
+                                    cx.update(|window, cx| {
+                                        // Check if state exists and get the start_time
+                                        let elapsed = long_press_state
+                                            .borrow()
+                                            .as_ref()
+                                            .map(|state| state.start_time.elapsed());
+
+                                        if let Some(duration) = elapsed {
+                                            let current_position = mouse_down.position;
+                                            let event = LongPressEvent {
+                                                down: mouse_down.clone(),
+                                                current_position,
+                                                button: mouse_down.button,
+                                                modifiers: mouse_down.modifiers,
+                                                duration,
+                                            };
+
+                                            for listener in &long_press_listeners {
+                                                listener(&event, window, cx);
+                                            }
+
+                                            long_press_state.borrow_mut().take();
+                                            window.refresh();
+                                        }
+                                    })
+                                    .ok();
+                                }
+                            });
+
+                            *long_press_state.borrow_mut() = Some(LongPressState {
+                                mouse_down: event.clone(),
+                                timer_task: task,
+                                duration,
+                                start_time,
+                            });
+                        }
+                    }
+                });
+
+                // Cancel on MouseMove beyond threshold
+                window.on_mouse_event({
+                    let long_press_state = long_press_state.clone();
+                    move |event: &MouseMoveEvent, phase, window, _cx| {
+                        if phase == DispatchPhase::Bubble {
+                            if let Some(state) = long_press_state.borrow().as_ref() {
+                                let movement =
+                                    (event.position - state.mouse_down.position).magnitude();
+                                if movement > DRAG_THRESHOLD {
+                                    long_press_state.borrow_mut().take();
+                                    window.refresh();
+                                }
+                            }
+                        }
+                    }
+                });
+
+                // Cancel on MouseUp (early release)
+                window.on_mouse_event({
+                    let long_press_state = long_press_state.clone();
+                    move |_: &MouseUpEvent, phase, window, _cx| {
+                        if phase == DispatchPhase::Capture {
+                            if long_press_state.borrow().is_some() {
+                                long_press_state.borrow_mut().take();
+                                window.refresh();
+                            }
+                        }
+                    }
+                });
+
+                // Cancel on MouseExit
+                window.on_mouse_event({
+                    move |_: &MouseExitEvent, _phase, window, _cx| {
+                        if long_press_state.borrow().is_some() {
+                            long_press_state.borrow_mut().take();
+                            window.refresh();
                         }
                     }
                 });
@@ -2582,6 +2762,20 @@ impl Interactivity {
     }
 }
 
+/// State for tracking a long press gesture.
+pub(crate) struct LongPressState {
+    /// The mouse down event that initiated this potential long press
+    mouse_down: MouseDownEvent,
+    /// The timer task that will fire the long press event
+    #[allow(dead_code)]
+    timer_task: Task<()>,
+    /// Duration configured for this long press
+    #[allow(dead_code)]
+    duration: Duration,
+    /// Start time of the mouse down (for calculating actual duration)
+    start_time: Instant,
+}
+
 /// The per-frame state of an interactive element. Used for tracking stateful interactions like clicks
 /// and scroll offsets.
 #[derive(Default)]
@@ -2592,6 +2786,7 @@ pub struct InteractiveElementState {
     pub(crate) pending_mouse_down: Option<Rc<RefCell<Option<MouseDownEvent>>>>,
     pub(crate) scroll_offset: Option<Rc<RefCell<Point<Pixels>>>>,
     pub(crate) active_tooltip: Option<Rc<RefCell<Option<ActiveTooltip>>>>,
+    pub(crate) long_press_state: Option<Rc<RefCell<Option<LongPressState>>>>,
 }
 
 /// Whether or not the element or a group that contains it is clicked by the mouse.
