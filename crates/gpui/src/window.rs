@@ -1862,6 +1862,39 @@ impl Window {
         self.platform_window.foreign_toplevels()
     }
 
+    /// Returns a handle to the virtual keyboard protocol.
+    ///
+    /// Allows sending keyboard events to the compositor as if they came from a physical keyboard.
+    /// This is only available on Wayland with the zwp_virtual_keyboard_v1 protocol.
+    /// Returns `None` if the protocol is not supported by the compositor.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn get_virtual_keyboard(&self) -> Option<crate::input_method::VirtualKeyboardHandle> {
+        self.platform_window.get_virtual_keyboard()
+    }
+
+    /// Returns a handle to the input method protocol.
+    ///
+    /// Allows the application to act as an input method (IME) and send text input to other applications.
+    /// This is only available on Wayland with the zwp_input_method_v2 protocol.
+    /// Returns `None` if the protocol is not supported by the compositor.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn get_input_method(&self) -> Option<crate::input_method::InputMethodHandle> {
+        self.platform_window.get_input_method()
+    }
+
+    /// Returns whether the input method is currently active.
+    ///
+    /// The input method becomes active when a text input field gains focus in another application,
+    /// and becomes inactive when the text input loses focus. This is useful for virtual keyboards
+    /// to show/hide themselves based on text input activation.
+    ///
+    /// This is only available on Wayland with the zwp_input_method_v2 protocol.
+    /// Returns `false` if the protocol is not supported by the compositor.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn is_input_method_active(&self) -> bool {
+        self.platform_window.is_input_method_active()
+    }
+
     /// Returns the client_inset value by [`Self::set_client_inset`].
     pub fn client_inset(&self) -> Option<Pixels> {
         self.client_inset

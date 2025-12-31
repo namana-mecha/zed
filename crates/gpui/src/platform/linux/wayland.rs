@@ -14,6 +14,9 @@ pub mod session_lock;
 /// Contains Types for managing foreign toplevel windows.
 pub mod foreign_toplevel_management;
 
+/// Contains Types for input method and virtual keyboard support.
+pub mod input_method;
+
 pub(crate) use client::*;
 
 use wayland_protocols::wp::cursor_shape::v1::client::wp_cursor_shape_device_v1::Shape;
