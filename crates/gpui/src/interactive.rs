@@ -3,7 +3,7 @@ use crate::{
     Window, point, seal::Sealed,
 };
 use smallvec::SmallVec;
-use std::{any::Any, fmt::Debug, ops::Deref, path::PathBuf};
+use std::{any::Any, fmt::Debug, ops::Deref, path::PathBuf, time::Duration};
 
 /// An event from a platform input source.
 pub trait InputEvent: Sealed + 'static {
@@ -291,6 +291,49 @@ impl ClickEvent {
             ClickEvent::Mouse(_) => false,
             ClickEvent::Keyboard(_) => true,
         }
+    }
+}
+
+/// A long press event, generated when a mouse button is held for a duration without moving
+/// beyond a threshold.
+#[derive(Clone, Debug)]
+pub struct LongPressEvent {
+    /// The mouse down event that initiated the long press
+    pub down: MouseDownEvent,
+    /// The current mouse position (may differ slightly from down position within threshold)
+    pub current_position: Point<Pixels>,
+    /// The button that was held
+    pub button: MouseButton,
+    /// Modifiers held during the long press
+    pub modifiers: Modifiers,
+    /// Duration the button was held before the event fired
+    pub duration: Duration,
+}
+
+impl LongPressEvent {
+    /// Returns the position where the long press started
+    pub fn position(&self) -> Point<Pixels> {
+        self.down.position
+    }
+
+    /// Returns the modifiers held during the long press
+    pub fn modifiers(&self) -> Modifiers {
+        self.modifiers
+    }
+
+    /// Returns the duration the button was held
+    pub fn duration(&self) -> Duration {
+        self.duration
+    }
+
+    /// Returns whether this was a right button long press
+    pub fn is_right_press(&self) -> bool {
+        self.button == MouseButton::Right
+    }
+
+    /// Returns whether this was a standard (left button) long press
+    pub fn standard_press(&self) -> bool {
+        self.button == MouseButton::Left
     }
 }
 
