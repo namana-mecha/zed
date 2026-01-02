@@ -13,8 +13,8 @@ use glutin::prelude::{GlSurface, PossiblyCurrentGlContext};
 use glutin::surface::{Surface as GlutinSurface, SurfaceAttributesBuilder, WindowSurface};
 
 use crate::{
-    DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad, Scene, Size,
-    platform::gl::GlAtlas,
+    DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad, Scene,
+    Shadow, Size, platform::gl::GlAtlas,
 };
 
 pub struct GlSurfaceConfig {
@@ -35,6 +35,11 @@ struct QuadProgram {
     u_viewport_size: Option<glow::UniformLocation>,
 }
 
+struct ShadowProgram {
+    program: glow::Program,
+    u_viewport_size: Option<glow::UniformLocation>,
+}
+
 pub struct GlRenderer {
     gl: Arc<glow::Context>,
     atlas: Arc<GlAtlas>,
@@ -49,6 +54,7 @@ pub struct GlRenderer {
     mono_program: SpriteProgram,
     poly_program: SpriteProgram,
     quad_program: QuadProgram,
+    shadow_program: ShadowProgram,
 
     index_buffer: glow::Buffer,
     dynamic_vertex_buffer: glow::Buffer,
@@ -122,7 +128,15 @@ impl GlRenderer {
         let version_str = unsafe { gl.get_parameter_string(glow::VERSION) };
         log::info!("GL Version String: {}", version_str);
 
-        let (vao, mono_program, poly_program, quad_program, index_buffer, dynamic_vertex_buffer) = unsafe {
+        let (
+            vao,
+            mono_program,
+            poly_program,
+            quad_program,
+            shadow_program,
+            index_buffer,
+            dynamic_vertex_buffer,
+        ) = unsafe {
             // FIX: Create a Vertex Array Object.
             // On many Desktop GL drivers, even when requesting GLES, a VAO is required to draw.
             // We use .ok() to return None if the driver genuinely doesn't support/require them (pure GLES 2.0).
@@ -137,6 +151,7 @@ impl GlRenderer {
             let mono = create_sprite_program(&gl, false)?;
             let poly = create_sprite_program(&gl, true)?;
             let quad = create_quad_program(&gl)?;
+            let shadow = create_shadow_program(&gl)?;
 
             // 1. Create and populate a static Index Buffer for drawing quads
             let index_buf = gl.create_buffer().map_err(|e| anyhow::anyhow!(e))?;
@@ -169,7 +184,7 @@ impl GlRenderer {
                 gl.bind_vertex_array(None);
             }
 
-            (vao, mono, poly, quad, index_buf, dyn_buf)
+            (vao, mono, poly, quad, shadow, index_buf, dyn_buf)
         };
 
         Ok(Self {
@@ -185,6 +200,7 @@ impl GlRenderer {
             mono_program,
             poly_program,
             quad_program,
+            shadow_program,
             index_buffer,
             dynamic_vertex_buffer,
             transparent: config.transparent,
@@ -215,8 +231,18 @@ impl GlRenderer {
                 self.viewport_size.height.0,
             );
             self.gl.enable(glow::BLEND);
-            self.gl
-                .blend_func(glow::SRC_ALPHA, glow::ONE_MINUS_SRC_ALPHA);
+
+            // FIX: Use separate blend function for Alpha channel.
+            // RGB:  SrcAlpha * Src + (1 - SrcAlpha) * Dst
+            // Alpha: 1 * SrcAlpha + (1 - SrcAlpha) * DstAlpha
+            // This ensures opacity is accumulated properly, preventing the window background
+            // (desktop) from showing through translucent quads when the window itself is supposed to be opaque.
+            self.gl.blend_func_separate(
+                glow::SRC_ALPHA,
+                glow::ONE_MINUS_SRC_ALPHA,
+                glow::ONE,
+                glow::ONE_MINUS_SRC_ALPHA,
+            );
 
             // Note: Depth testing is not enabled, so we only clear COLOR and Depth (just in case)
             self.gl
@@ -240,6 +266,7 @@ impl GlRenderer {
                     sprites,
                 } => self.draw_polychrome_sprites(texture_id, sprites),
                 PrimitiveBatch::Quads(quads) => self.draw_quads(quads),
+                PrimitiveBatch::Shadows(shadows) => self.draw_shadows(shadows),
                 _ => {}
             }
         }
@@ -303,6 +330,9 @@ impl GlRenderer {
         };
 
         unsafe {
+            // FIX: Bind program before setting uniforms
+            self.gl.use_program(Some(self.mono_program.program));
+
             self.gl.active_texture(glow::TEXTURE0);
             self.gl
                 .bind_texture(glow::TEXTURE_2D, Some(texture_info.texture));
@@ -318,7 +348,12 @@ impl GlRenderer {
                 );
             }
             if let Some(loc) = &self.mono_program.u_atlas_size {
-                self.gl.uniform_2_f32(Some(loc), 1024.0, 1024.0);
+                // FIX: Use actual texture size, not hardcoded 1024.0
+                self.gl.uniform_2_f32(
+                    Some(loc),
+                    texture_info.size.width.0 as f32,
+                    texture_info.size.height.0 as f32,
+                );
             }
 
             let quad_coords = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
@@ -377,6 +412,9 @@ impl GlRenderer {
         };
 
         unsafe {
+            // FIX: Bind program before setting uniforms
+            self.gl.use_program(Some(self.poly_program.program));
+
             self.gl.active_texture(glow::TEXTURE0);
             self.gl
                 .bind_texture(glow::TEXTURE_2D, Some(texture_info.texture));
@@ -392,7 +430,12 @@ impl GlRenderer {
                 );
             }
             if let Some(loc) = &self.poly_program.u_atlas_size {
-                self.gl.uniform_2_f32(Some(loc), 1024.0, 1024.0);
+                // FIX: Use actual texture size
+                self.gl.uniform_2_f32(
+                    Some(loc),
+                    texture_info.size.width.0 as f32,
+                    texture_info.size.height.0 as f32,
+                );
             }
 
             let quad_coords = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
@@ -433,8 +476,10 @@ impl GlRenderer {
             return;
         }
         unsafe {
+            // FIX: Bind program before setting uniforms
+            self.gl.use_program(Some(self.quad_program.program));
+
             if let Some(loc) = &self.quad_program.u_viewport_size {
-                self.gl.use_program(Some(self.quad_program.program));
                 self.gl.uniform_2_f32(
                     Some(loc),
                     self.viewport_size.width.0 as f32,
@@ -508,6 +553,58 @@ impl GlRenderer {
                     }
                 },
                 2 + 36,
+            );
+        }
+    }
+
+    fn draw_shadows(&mut self, shadows: &[Shadow]) {
+        if shadows.is_empty() {
+            return;
+        }
+
+        unsafe {
+            // FIX: Bind program before setting uniforms
+            self.gl.use_program(Some(self.shadow_program.program));
+
+            if let Some(loc) = &self.shadow_program.u_viewport_size {
+                self.gl.uniform_2_f32(
+                    Some(loc),
+                    self.viewport_size.width.0 as f32,
+                    self.viewport_size.height.0 as f32,
+                );
+            }
+
+            let quad_coords = [[0.0, 0.0], [1.0, 0.0], [0.0, 1.0], [1.0, 1.0]];
+
+            self.draw_batch(
+                shadows,
+                &self.shadow_program.program,
+                |r, stride| r.bind_shadow_attribs(stride),
+                |shadow, out| {
+                    let c = shadow.color.to_rgb();
+                    for qc in quad_coords {
+                        out.push(qc[0]); // a_unit_quad.x
+                        out.push(qc[1]); // a_unit_quad.y
+                        out.push(shadow.bounds.origin.x.0); // a_bounds.x
+                        out.push(shadow.bounds.origin.y.0); // a_bounds.y
+                        out.push(shadow.bounds.size.width.0); // a_bounds.z
+                        out.push(shadow.bounds.size.height.0); // a_bounds.w
+                        out.push(shadow.content_mask.bounds.origin.x.0); // a_mask.x
+                        out.push(shadow.content_mask.bounds.origin.y.0); // a_mask.y
+                        out.push(shadow.content_mask.bounds.size.width.0); // a_mask.z
+                        out.push(shadow.content_mask.bounds.size.height.0); // a_mask.w
+                        out.push(shadow.corner_radii.top_left.0); // a_corner_radii.x
+                        out.push(shadow.corner_radii.top_right.0); // a_corner_radii.y
+                        out.push(shadow.corner_radii.bottom_right.0); // a_corner_radii.z
+                        out.push(shadow.corner_radii.bottom_left.0); // a_corner_radii.w
+                        out.push(c.r); // a_color.r
+                        out.push(c.g); // a_color.g
+                        out.push(c.b); // a_color.b
+                        out.push(c.a); // a_color.a
+                        out.push(shadow.blur_radius.0); // a_blur_radius
+                    }
+                },
+                2 + 4 + 4 + 4 + 4 + 1, // Total floats per vertex: 19
             );
         }
     }
@@ -588,6 +685,72 @@ impl GlRenderer {
         }
     }
 
+    fn bind_shadow_attribs(&self, stride: i32) {
+        unsafe {
+            let f32_size = mem::size_of::<f32>() as i32;
+            // a_unit_quad (2)
+            self.gl.enable_vertex_attrib_array(0);
+            self.gl
+                .vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
+
+            let base_offset = 2 * f32_size;
+
+            // a_bounds (4)
+            self.gl.enable_vertex_attrib_array(1);
+            self.gl
+                .vertex_attrib_pointer_f32(1, 4, glow::FLOAT, false, stride, base_offset);
+
+            // a_mask (4)
+            self.gl.enable_vertex_attrib_array(2);
+            self.gl.vertex_attrib_pointer_f32(
+                2,
+                4,
+                glow::FLOAT,
+                false,
+                stride,
+                base_offset + 4 * f32_size,
+            );
+
+            // a_corner_radii (4)
+            self.gl.enable_vertex_attrib_array(3);
+            self.gl.vertex_attrib_pointer_f32(
+                3,
+                4,
+                glow::FLOAT,
+                false,
+                stride,
+                base_offset + 8 * f32_size,
+            );
+
+            // a_color (4)
+            self.gl.enable_vertex_attrib_array(4);
+            self.gl.vertex_attrib_pointer_f32(
+                4,
+                4,
+                glow::FLOAT,
+                false,
+                stride,
+                base_offset + 12 * f32_size,
+            );
+
+            // a_blur_radius (1)
+            self.gl.enable_vertex_attrib_array(5);
+            self.gl.vertex_attrib_pointer_f32(
+                5,
+                1,
+                glow::FLOAT,
+                false,
+                stride,
+                base_offset + 16 * f32_size,
+            );
+
+            // Disable unused attributes from other programs to be safe
+            for i in 6..=9 {
+                self.gl.disable_vertex_attrib_array(i);
+            }
+        }
+    }
+
     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
         self.viewport_size = size;
         let width = NonZeroU32::new(size.width.0 as u32).unwrap_or(NonZeroU32::MIN);
@@ -623,6 +786,7 @@ impl GlRenderer {
             self.gl.delete_program(self.mono_program.program);
             self.gl.delete_program(self.poly_program.program);
             self.gl.delete_program(self.quad_program.program);
+            self.gl.delete_program(self.shadow_program.program);
             self.gl.delete_buffer(self.index_buffer);
             self.gl.delete_buffer(self.dynamic_vertex_buffer);
         }
@@ -877,6 +1041,130 @@ fn create_quad_program(gl: &glow::Context) -> anyhow::Result<QuadProgram> {
     ];
     let program = compile_program(gl, vs_source, fs_source, &attribs)?;
     Ok(QuadProgram {
+        program,
+        u_viewport_size: unsafe { gl.get_uniform_location(program, "u_viewport_size") },
+    })
+}
+
+fn create_shadow_program(gl: &glow::Context) -> anyhow::Result<ShadowProgram> {
+    let vs_source = r#"#version 100
+        precision highp float;
+        attribute vec2 a_unit_quad;
+        attribute vec4 a_bounds;
+        attribute vec4 a_mask;
+        attribute vec4 a_corner_radii;
+        attribute vec4 a_color;
+        attribute float a_blur_radius;
+
+        uniform vec2 u_viewport_size;
+
+        varying vec4 v_color;
+        varying vec2 v_pos;      // Screen position (pixels)
+        varying vec4 v_bounds;   // Original bounds (for corner calc)
+        varying vec4 v_mask;
+        varying vec4 v_corner_radii;
+        varying float v_blur_radius;
+
+        void main() {
+            float margin = 3.0 * a_blur_radius;
+            // Expand the bounds to account for the blur spread
+            vec2 origin = a_bounds.xy - vec2(margin);
+            vec2 size = a_bounds.zw + vec2(2.0 * margin);
+            vec2 pos_px = origin + a_unit_quad * size;
+
+            v_bounds = a_bounds;
+            v_color = a_color;
+            v_mask = a_mask;
+            v_corner_radii = a_corner_radii;
+            v_blur_radius = a_blur_radius;
+            v_pos = pos_px;
+
+            vec2 ndc = (pos_px / u_viewport_size) * 2.0 - 1.0;
+            ndc.y = -ndc.y;
+            gl_Position = vec4(ndc, 0.0, 1.0);
+        }
+    "#;
+
+    let fs_source = r#"#version 100
+        precision highp float;
+
+        varying vec4 v_color;
+        varying vec2 v_pos;
+        varying vec4 v_bounds;
+        varying vec4 v_mask;
+        varying vec4 v_corner_radii;
+        varying float v_blur_radius;
+
+        // Approximation of the error function
+        vec2 erf(vec2 x) {
+            vec2 s = sign(x);
+            vec2 a = abs(x);
+            x = 1.0 + (0.278393 + (0.230389 + (0.000972 + 0.078108 * a) * a) * a) * a;
+            x = x * x;
+            return s - s / (x * x);
+        }
+
+        float gaussian(float x, float sigma) {
+            return exp(-(x * x) / (2.0 * sigma * sigma)) / (2.506628 * sigma); // 2.506... is sqrt(2*PI)
+        }
+
+        float blur_along_x(float x, float y, float sigma, float corner, vec2 half_size) {
+            float delta = min(half_size.y - corner - abs(y), 0.0);
+            float curved = half_size.x - corner + sqrt(max(0.0, corner * corner - delta * delta));
+            vec2 integral = 0.5 + 0.5 * erf((vec2(x) + vec2(-curved, curved)) * (0.707106 / sigma)); // 0.707... is sqrt(0.5)
+            return integral.y - integral.x;
+        }
+
+        float pick_corner_radius(vec2 center_to_point, vec4 radii) {
+            if (center_to_point.x < 0.0) { return (center_to_point.y < 0.0) ? radii.x : radii.w; }
+            else { return (center_to_point.y < 0.0) ? radii.y : radii.z; }
+        }
+
+        void main() {
+            // Clip logic
+            if (v_pos.x < v_mask.x || v_pos.y < v_mask.y ||
+                v_pos.x > v_mask.x + v_mask.z || v_pos.y > v_mask.y + v_mask.w) {
+                discard;
+            }
+
+            vec2 half_size = v_bounds.zw / 2.0;
+            vec2 center = v_bounds.xy + half_size;
+            vec2 center_to_point = v_pos - center;
+
+            float corner_radius = pick_corner_radius(center_to_point, v_corner_radii);
+
+            // Limit range of integration to where the signal is non-zero
+            float low = center_to_point.y - half_size.y;
+            float high = center_to_point.y + half_size.y;
+            float start = clamp(-3.0 * v_blur_radius, low, high);
+            float end = clamp(3.0 * v_blur_radius, low, high);
+
+            // Integrate
+            float step_size = (end - start) / 4.0;
+            float y = start + step_size * 0.5;
+            float alpha = 0.0;
+            
+            // Loop unrolled for GLES 2.0 safety/performance
+            for (int i = 0; i < 4; i++) {
+                float blur = blur_along_x(center_to_point.x, center_to_point.y - y, v_blur_radius, corner_radius, half_size);
+                alpha += blur * gaussian(y, v_blur_radius) * step_size;
+                y += step_size;
+            }
+
+            gl_FragColor = vec4(v_color.rgb, v_color.a * alpha);
+        }
+    "#;
+
+    let attribs = vec![
+        (0, "a_unit_quad"),
+        (1, "a_bounds"),
+        (2, "a_mask"),
+        (3, "a_corner_radii"),
+        (4, "a_color"),
+        (5, "a_blur_radius"),
+    ];
+    let program = compile_program(gl, vs_source, fs_source, &attribs)?;
+    Ok(ShadowProgram {
         program,
         u_viewport_size: unsafe { gl.get_uniform_location(program, "u_viewport_size") },
     })

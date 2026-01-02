@@ -42,6 +42,8 @@ unsafe impl Send for GlAtlasState {}
 pub struct GlTextureInfo {
     pub texture: glow::Texture,
     pub format: GlTextureFormat,
+    // FIX: Add size field to TextureInfo so renderer knows correct UV scale
+    pub size: Size<DevicePixels>,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,6 +74,7 @@ impl GlAtlas {
         texture.gl_texture.map(|t| GlTextureInfo {
             texture: t,
             format: texture.format,
+            size: texture.size,
         })
     }
 }
@@ -260,6 +263,9 @@ impl GlAtlasState {
                     glow::TEXTURE_WRAP_T,
                     glow::CLAMP_TO_EDGE as i32,
                 );
+                // FIX: Explicitly set MAX_LEVEL to 0 to signal no mipmaps.
+                // This prevents "incomplete texture" state on some drivers.
+                gl.tex_parameter_i32(glow::TEXTURE_2D, glow::TEXTURE_MAX_LEVEL, 0);
 
                 gl.pixel_store_i32(glow::UNPACK_ALIGNMENT, 1);
 
