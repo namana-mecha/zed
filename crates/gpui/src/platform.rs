@@ -17,6 +17,15 @@ mod mac;
 ))]
 mod blade;
 
+#[cfg(any(
+    all(
+        any(target_os = "linux", target_os = "freebsd"),
+        any(feature = "x11", feature = "wayland"),
+        feature = "linux-gl"
+    ),
+))]
+mod gl;
+
 #[cfg(any(test, feature = "test-support"))]
 mod test;
 

@@ -37,6 +37,7 @@ use crate::{
     platform::{
         PlatformAtlas, PlatformInputHandler, PlatformWindow,
         blade::{BladeContext, BladeRenderer, BladeSurfaceConfig},
+        gl::GlRenderer,
         linux::wayland::{display::WaylandDisplay, serial::SerialKind},
     },
 };
@@ -97,7 +98,10 @@ pub struct WaylandWindowState {
     outputs: HashMap<ObjectId, Output>,
     display: Option<(ObjectId, Output)>,
     globals: Globals,
+    #[cfg(not(feature = "linux-gl"))]
     renderer: BladeRenderer,
+    #[cfg(feature = "linux-gl")]
+    renderer: GlRenderer,
     bounds: Bounds<Pixels>,
     scale: f32,
     input_handler: Option<PlatformInputHandler>,
@@ -318,6 +322,7 @@ impl WaylandWindowState {
         options: WindowParams,
         parent: Option<WaylandWindowStatePtr>,
     ) -> anyhow::Result<Self> {
+        #[cfg(not(feature = "linux-gl"))]
         let renderer = {
             let raw_window = RawWindow {
                 window: surface.id().as_ptr().cast::<c_void>(),
@@ -337,6 +342,27 @@ impl WaylandWindowState {
                 transparent: true,
             };
             BladeRenderer::new(gpu_context, &raw_window, config)?
+        };
+
+        #[cfg(feature = "linux-gl")]
+        let renderer = {
+            use crate::platform::gl::GlSurfaceConfig;
+
+            let raw_window = RawWindow {
+                window: surface.id().as_ptr().cast::<c_void>(),
+                display: surface
+                    .backend()
+                    .upgrade()
+                    .unwrap()
+                    .display_ptr()
+                    .cast::<c_void>(),
+            };
+            let config = GlSurfaceConfig {
+                width: options.bounds.size.width.0 as u32,
+                height: options.bounds.size.height.0 as u32,
+                transparent: true,
+            };
+            GlRenderer::new(config, &raw_window)?
         };
 
         if let WaylandSurfaceState::Xdg(ref xdg_state) = surface_state {

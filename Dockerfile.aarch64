@@ -1,0 +1,37 @@
+# We use the official cross-rs image which already has the Rust toolchain
+# and the aarch64-linux-gnu-gcc linker installed.
+FROM ghcr.io/cross-rs/aarch64-unknown-linux-gnu:edge
+
+# 1. Enable the arm64 architecture so apt can find the foreign libraries
+RUN dpkg --add-architecture arm64
+
+# 2. Update apt repositories
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    pkg-config \
+    tar \
+    unzip \
+    libssl-dev:arm64 \
+    libfontconfig1-dev:arm64 \
+    libxcb1-dev:arm64 \
+    libxcb-render0-dev:arm64 \
+    libxcb-shape0-dev:arm64 \
+    libxcb-xfixes0-dev:arm64 \
+    libxkbcommon-dev:arm64 \
+    libxkbcommon-x11-dev:arm64 \
+    libwayland-dev:arm64 \
+    libvulkan-dev:arm64 \
+    libasound2-dev:arm64 \
+    libzstd-dev:arm64  \
+    libegl1-mesa-dev:arm64
+
+# 3. Configure PKG_CONFIG to look for the ARM64 libraries, not the x86 ones.
+# This is the most critical step for cross-compilation.
+ENV PKG_CONFIG_PATH="/usr/lib/aarch64-linux-gnu/pkgconfig:/usr/share/pkgconfig"
+ENV PKG_CONFIG_ALLOW_CROSS=1
+
+# 4. (Optional) Set OpenSSL variables if pkg-config fails to find it
+ENV OPENSSL_DIR="/usr"
+ENV OPENSSL_LIB_DIR="/usr/lib/aarch64-linux-gnu"
+ENV OPENSSL_INCLUDE_DIR="/usr/include"
+
+RUN ldconfig
