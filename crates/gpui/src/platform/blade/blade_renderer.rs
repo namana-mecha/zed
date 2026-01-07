@@ -903,6 +903,9 @@ impl BladeRenderer {
                         }
                     }
                 }
+                PrimitiveBatch::Polygons(_) => {
+                    // Polygons are not yet supported in the blade renderer
+                }
             }
         }
         drop(pass);

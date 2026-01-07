@@ -13,8 +13,8 @@ use glutin::prelude::{GlSurface, PossiblyCurrentGlContext};
 use glutin::surface::{Surface as GlutinSurface, SurfaceAttributesBuilder, WindowSurface};
 
 use crate::{
-    DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad, Scene,
-    Shadow, Size, platform::gl::GlAtlas,
+    DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite, Polygon, PrimitiveBatch, Quad,
+    ScaledPixels, Scene, Shadow, Size, platform::gl::GlAtlas,
 };
 
 pub struct GlSurfaceConfig {
@@ -40,6 +40,11 @@ struct ShadowProgram {
     u_viewport_size: Option<glow::UniformLocation>,
 }
 
+struct PolygonProgram {
+    program: glow::Program,
+    u_viewport_size: Option<glow::UniformLocation>,
+}
+
 pub struct GlRenderer {
     gl: Arc<glow::Context>,
     atlas: Arc<GlAtlas>,
@@ -55,6 +60,7 @@ pub struct GlRenderer {
     poly_program: SpriteProgram,
     quad_program: QuadProgram,
     shadow_program: ShadowProgram,
+    polygon_program: PolygonProgram,
 
     index_buffer: glow::Buffer,
     dynamic_vertex_buffer: glow::Buffer,
@@ -134,6 +140,7 @@ impl GlRenderer {
             poly_program,
             quad_program,
             shadow_program,
+            polygon_program,
             index_buffer,
             dynamic_vertex_buffer,
         ) = unsafe {
@@ -152,6 +159,7 @@ impl GlRenderer {
             let poly = create_sprite_program(&gl, true)?;
             let quad = create_quad_program(&gl)?;
             let shadow = create_shadow_program(&gl)?;
+            let polygon = create_polygon_program(&gl)?;
 
             // 1. Create and populate a static Index Buffer for drawing quads
             let index_buf = gl.create_buffer().map_err(|e| anyhow::anyhow!(e))?;
@@ -184,7 +192,7 @@ impl GlRenderer {
                 gl.bind_vertex_array(None);
             }
 
-            (vao, mono, poly, quad, shadow, index_buf, dyn_buf)
+            (vao, mono, poly, quad, shadow, polygon, index_buf, dyn_buf)
         };
 
         Ok(Self {
@@ -201,6 +209,7 @@ impl GlRenderer {
             poly_program,
             quad_program,
             shadow_program,
+            polygon_program,
             index_buffer,
             dynamic_vertex_buffer,
             transparent: config.transparent,
@@ -266,6 +275,7 @@ impl GlRenderer {
                     sprites,
                 } => self.draw_polychrome_sprites(texture_id, sprites),
                 PrimitiveBatch::Quads(quads) => self.draw_quads(quads),
+                PrimitiveBatch::Polygons(polygons) => self.draw_polygons(polygons),
                 PrimitiveBatch::Shadows(shadows) => self.draw_shadows(shadows),
                 _ => {}
             }
@@ -609,6 +619,116 @@ impl GlRenderer {
         }
     }
 
+    fn draw_polygons(&mut self, polygons: &[crate::Polygon<ScaledPixels>]) {
+        if polygons.is_empty() {
+            return;
+        }
+
+        unsafe {
+            self.gl.use_program(Some(self.polygon_program.program));
+
+            if let Some(loc) = &self.polygon_program.u_viewport_size {
+                self.gl.uniform_2_f32(
+                    Some(loc),
+                    self.viewport_size.width.0 as f32,
+                    self.viewport_size.height.0 as f32,
+                );
+            }
+
+            for polygon in polygons {
+                if polygon.points.len() < 3 {
+                    continue;
+                }
+
+                let center_x = polygon.points.iter().map(|p| p.x.0).sum::<f32>() / polygon.points.len() as f32;
+                let center_y = polygon.points.iter().map(|p| p.y.0).sum::<f32>() / polygon.points.len() as f32;
+
+                let num_triangles = polygon.points.len();
+                let mut vertices = Vec::with_capacity(num_triangles * 3 * 19);
+
+                let bg_color = polygon.background.solid.to_rgb();
+                let border_color = polygon.border_color.to_rgb();
+
+                for i in 0..polygon.points.len() {
+                    let next_i = (i + 1) % polygon.points.len();
+                    let pt1 = polygon.points[i];
+                    let pt2 = polygon.points[next_i];
+
+                    vertices.push(center_x);
+                    vertices.push(center_y);
+                    vertices.push(polygon.bounds.origin.x.0);
+                    vertices.push(polygon.bounds.origin.y.0);
+                    vertices.push(polygon.bounds.size.width.0);
+                    vertices.push(polygon.bounds.size.height.0);
+                    vertices.push(polygon.content_mask.bounds.origin.x.0);
+                    vertices.push(polygon.content_mask.bounds.origin.y.0);
+                    vertices.push(polygon.content_mask.bounds.size.width.0);
+                    vertices.push(polygon.content_mask.bounds.size.height.0);
+                    vertices.push(border_color.r);
+                    vertices.push(border_color.g);
+                    vertices.push(border_color.b);
+                    vertices.push(border_color.a);
+                    vertices.push(polygon.border_width.0);
+                    vertices.push(bg_color.r);
+                    vertices.push(bg_color.g);
+                    vertices.push(bg_color.b);
+                    vertices.push(bg_color.a);
+
+                    vertices.push(pt1.x.0);
+                    vertices.push(pt1.y.0);
+                    vertices.push(polygon.bounds.origin.x.0);
+                    vertices.push(polygon.bounds.origin.y.0);
+                    vertices.push(polygon.bounds.size.width.0);
+                    vertices.push(polygon.bounds.size.height.0);
+                    vertices.push(polygon.content_mask.bounds.origin.x.0);
+                    vertices.push(polygon.content_mask.bounds.origin.y.0);
+                    vertices.push(polygon.content_mask.bounds.size.width.0);
+                    vertices.push(polygon.content_mask.bounds.size.height.0);
+                    vertices.push(border_color.r);
+                    vertices.push(border_color.g);
+                    vertices.push(border_color.b);
+                    vertices.push(border_color.a);
+                    vertices.push(polygon.border_width.0);
+                    vertices.push(bg_color.r);
+                    vertices.push(bg_color.g);
+                    vertices.push(bg_color.b);
+                    vertices.push(bg_color.a);
+
+                    vertices.push(pt2.x.0);
+                    vertices.push(pt2.y.0);
+                    vertices.push(polygon.bounds.origin.x.0);
+                    vertices.push(polygon.bounds.origin.y.0);
+                    vertices.push(polygon.bounds.size.width.0);
+                    vertices.push(polygon.bounds.size.height.0);
+                    vertices.push(polygon.content_mask.bounds.origin.x.0);
+                    vertices.push(polygon.content_mask.bounds.origin.y.0);
+                    vertices.push(polygon.content_mask.bounds.size.width.0);
+                    vertices.push(polygon.content_mask.bounds.size.height.0);
+                    vertices.push(border_color.r);
+                    vertices.push(border_color.g);
+                    vertices.push(border_color.b);
+                    vertices.push(border_color.a);
+                    vertices.push(polygon.border_width.0);
+                    vertices.push(bg_color.r);
+                    vertices.push(bg_color.g);
+                    vertices.push(bg_color.b);
+                    vertices.push(bg_color.a);
+                }
+
+                self.gl.buffer_data_u8_slice(
+                    glow::ARRAY_BUFFER,
+                    bytemuck::cast_slice(&vertices),
+                    glow::DYNAMIC_DRAW,
+                );
+
+                let stride = 19 * mem::size_of::<f32>() as i32;
+                self.bind_polygon_attribs(stride);
+
+                self.gl.draw_arrays(glow::TRIANGLES, 0, (num_triangles * 3) as i32);
+            }
+        }
+    }
+
     unsafe fn bind_sprite_attribs(&self, stride: i32, is_polychrome: bool) {
         unsafe {
             let f32_size = mem::size_of::<f32>() as i32;
@@ -751,6 +871,73 @@ impl GlRenderer {
         }
     }
 
+    fn bind_polygon_attribs(&self, stride: i32) {
+        unsafe {
+            let f32_size = mem::size_of::<f32>() as i32;
+
+            // a_position (2)
+            self.gl.enable_vertex_attrib_array(0);
+            self.gl
+                .vertex_attrib_pointer_f32(0, 2, glow::FLOAT, false, stride, 0);
+
+            let base_offset = 2 * f32_size;
+
+            // a_bounds (4)
+            self.gl.enable_vertex_attrib_array(1);
+            self.gl
+                .vertex_attrib_pointer_f32(1, 4, glow::FLOAT, false, stride, base_offset);
+
+            // a_mask (4)
+            self.gl.enable_vertex_attrib_array(2);
+            self.gl.vertex_attrib_pointer_f32(
+                2,
+                4,
+                glow::FLOAT,
+                false,
+                stride,
+                base_offset + 4 * f32_size,
+            );
+
+            // a_border_color (4)
+            self.gl.enable_vertex_attrib_array(3);
+            self.gl.vertex_attrib_pointer_f32(
+                3,
+                4,
+                glow::FLOAT,
+                false,
+                stride,
+                base_offset + 8 * f32_size,
+            );
+
+            // a_border_width (1)
+            self.gl.enable_vertex_attrib_array(4);
+            self.gl.vertex_attrib_pointer_f32(
+                4,
+                1,
+                glow::FLOAT,
+                false,
+                stride,
+                base_offset + 12 * f32_size,
+            );
+
+            // a_bg_color (4)
+            self.gl.enable_vertex_attrib_array(5);
+            self.gl.vertex_attrib_pointer_f32(
+                5,
+                4,
+                glow::FLOAT,
+                false,
+                stride,
+                base_offset + 13 * f32_size,
+            );
+
+            // Disable unused attributes
+            for i in 6..=9 {
+                self.gl.disable_vertex_attrib_array(i);
+            }
+        }
+    }
+
     pub fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
         self.viewport_size = size;
         let width = NonZeroU32::new(size.width.0 as u32).unwrap_or(NonZeroU32::MIN);
@@ -787,6 +974,7 @@ impl GlRenderer {
             self.gl.delete_program(self.poly_program.program);
             self.gl.delete_program(self.quad_program.program);
             self.gl.delete_program(self.shadow_program.program);
+            self.gl.delete_program(self.polygon_program.program);
             self.gl.delete_buffer(self.index_buffer);
             self.gl.delete_buffer(self.dynamic_vertex_buffer);
         }
@@ -1165,6 +1353,75 @@ fn create_shadow_program(gl: &glow::Context) -> anyhow::Result<ShadowProgram> {
     ];
     let program = compile_program(gl, vs_source, fs_source, &attribs)?;
     Ok(ShadowProgram {
+        program,
+        u_viewport_size: unsafe { gl.get_uniform_location(program, "u_viewport_size") },
+    })
+}
+
+fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> {
+    let vs_source = r#"#version 100
+        precision highp float;
+        attribute vec2 a_position;
+        attribute vec4 a_bounds;
+        attribute vec4 a_mask;
+        attribute vec4 a_border_color;
+        attribute float a_border_width;
+        attribute vec4 a_bg_color;
+
+        uniform vec2 u_viewport_size;
+
+        varying vec2 v_pos;
+        varying vec4 v_bounds;
+        varying vec4 v_mask;
+        varying vec4 v_border_color;
+        varying float v_border_width;
+        varying vec4 v_bg_color;
+
+        void main() {
+            v_pos = a_position;
+            v_bounds = a_bounds;
+            v_mask = a_mask;
+            v_border_color = a_border_color;
+            v_border_width = a_border_width;
+            v_bg_color = a_bg_color;
+
+            vec2 ndc = (a_position / u_viewport_size) * 2.0 - 1.0;
+            ndc.y = -ndc.y;
+            gl_Position = vec4(ndc, 0.0, 1.0);
+        }
+    "#;
+
+    let fs_source = r#"#version 100
+        precision mediump float;
+
+        varying vec2 v_pos;
+        varying vec4 v_bounds;
+        varying vec4 v_mask;
+        varying vec4 v_border_color;
+        varying float v_border_width;
+        varying vec4 v_bg_color;
+
+        void main() {
+            if (v_pos.x < v_mask.x || v_pos.y < v_mask.y ||
+                v_pos.x > v_mask.x + v_mask.z || v_pos.y > v_mask.y + v_mask.w) {
+                discard;
+            }
+
+            gl_FragColor = v_bg_color;
+        }
+    "#;
+
+    let attribs = vec![
+        (0, "a_position"),
+        (1, "a_bounds"),
+        (2, "a_mask"),
+        (3, "a_border_color"),
+        (4, "a_border_width"),
+        (5, "a_bg_color"),
+    ];
+
+    let program = compile_program(gl, vs_source, fs_source, &attribs)?;
+    Ok(PolygonProgram {
         program,
         u_viewport_size: unsafe { gl.get_uniform_location(program, "u_viewport_size") },
     })
