@@ -3,6 +3,9 @@ use blade_graphics as gpu;
 use std::sync::Arc;
 use util::ResultExt;
 
+use super::BladeRenderer;
+use crate::platform::{PlatformRenderer, PlatformRendererContext};
+
 #[cfg_attr(target_os = "macos", derive(Clone))]
 pub struct BladeContext {
     pub(super) gpu: Arc<gpu::Context>,
@@ -33,6 +36,20 @@ impl BladeContext {
             .map_err(|e| anyhow::anyhow!("{e:?}"))?,
         );
         Ok(Self { gpu })
+    }
+}
+
+impl PlatformRendererContext for BladeContext {
+    type Renderer = BladeRenderer;
+
+    fn create_renderer<
+        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        &self,
+        window: &I,
+        params: <Self::Renderer as PlatformRenderer>::RenderParams,
+    ) -> anyhow::Result<Self::Renderer> {
+        Self::Renderer::new(self, window, params)
     }
 }
 

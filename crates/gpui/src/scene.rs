@@ -482,6 +482,30 @@ pub(crate) enum PrimitiveBatch<'a> {
 }
 
 #[derive(Default, Debug, Clone)]
+pub(crate) struct Polygon<P: Clone + Debug + Default + PartialEq = ScaledPixels> {
+    pub order: DrawOrder,
+    pub border_style: BorderStyle,
+    pub bounds: Bounds<P>,
+    pub content_mask: ContentMask<P>,
+    pub background: Background,
+    pub border_color: Hsla,
+    pub border_width: P,
+    pub points: Vec<Point<P>>,
+}
+
+impl<P: Clone + Debug + Default + PartialEq> Polygon<P> {
+    pub fn insert_point(&mut self, point: Point<P>) {
+        self.points.push(point);
+    }
+}
+
+impl From<Polygon<ScaledPixels>> for Primitive {
+    fn from(polygon: Polygon<ScaledPixels>) -> Self {
+        Primitive::Polygon(polygon)
+    }
+}
+
+#[derive(Default, Debug, Clone)]
 #[repr(C)]
 pub(crate) struct Quad {
     pub order: DrawOrder,

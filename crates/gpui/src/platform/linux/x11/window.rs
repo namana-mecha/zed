@@ -1,13 +1,14 @@
 use anyhow::{Context as _, anyhow};
 use x11rb::connection::RequestConnection;
 
-use crate::platform::blade::{BladeContext, BladeRenderer, BladeSurfaceConfig};
+use crate::platform::linux::{self, RendererContext, RendererParams};
 use crate::{
     AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
-    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler, PlatformWindow,
-    Point, PromptButton, PromptLevel, RequestFrameOptions, ResizeEdge, ScaledPixels, Scene, Size,
-    Tiling, WindowAppearance, WindowBackgroundAppearance, WindowBounds, WindowControlArea,
-    WindowDecorations, WindowKind, WindowParams, X11ClientStatePtr, px, size,
+    Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
+    PlatformRenderer as _, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams,
+    X11ClientStatePtr, px, size,
 };
 
 use blade_graphics as gpu;
@@ -261,7 +262,7 @@ pub struct X11WindowState {
     pub(crate) last_sync_counter: Option<sync::Int64>,
     bounds: Bounds<Pixels>,
     scale_factor: f32,
-    renderer: BladeRenderer,
+    renderer: linux::Renderer,
     display: Rc<dyn PlatformDisplay>,
     input_handler: Option<PlatformInputHandler>,
     appearance: WindowAppearance,
@@ -389,7 +390,7 @@ impl X11WindowState {
         handle: AnyWindowHandle,
         client: X11ClientStatePtr,
         executor: ForegroundExecutor,
-        gpu_context: &BladeContext,
+        gpu_context: &RendererContext,
         params: WindowParams,
         xcb: &Rc<XCBConnection>,
         client_side_decorations_supported: bool,
@@ -682,17 +683,25 @@ impl X11WindowState {
                     window_id: x_window,
                     visual_id: visual.id,
                 };
-                let config = BladeSurfaceConfig {
+
+                let size = query_render_extent(xcb, x_window)?;
+
+                #[cfg(feature = "linux-impeller")]
+                let params: RendererParams = (size.width, size.height);
+
+                #[cfg(not(feature = "linux-impeller"))]
+                let params = RendererParams {
                     // Note: this has to be done after the GPU init, or otherwise
                     // the sizes are immediately invalidated.
-                    size: query_render_extent(xcb, x_window)?,
+                    size,
                     // We set it to transparent by default, even if we have client-side
                     // decorations, since those seem to work on X11 even without `true` here.
                     // If the window appearance changes, then the renderer will get updated
                     // too
                     transparent: false,
                 };
-                BladeRenderer::new(gpu_context, &raw_window, config)?
+
+                linux::Renderer::new(gpu_context, &raw_window, params)?
             };
 
             let display = Rc::new(X11Display::new(xcb, scale_factor, x_screen_index)?);
@@ -740,11 +749,7 @@ impl X11WindowState {
     }
 
     fn content_size(&self) -> Size<Pixels> {
-        let size = self.renderer.viewport_size();
-        Size {
-            width: size.width.into(),
-            height: size.height.into(),
-        }
+        self.bounds.size
     }
 }
 
@@ -800,7 +805,7 @@ impl X11Window {
         handle: AnyWindowHandle,
         client: X11ClientStatePtr,
         executor: ForegroundExecutor,
-        gpu_context: &BladeContext,
+        gpu_context: &RendererContext,
         params: WindowParams,
         xcb: &Rc<XCBConnection>,
         client_side_decorations_supported: bool,
@@ -1741,5 +1746,9 @@ impl PlatformWindow for X11Window {
 
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.0.state.borrow().renderer.gpu_specs().into()
+    }
+
+    fn set_input_regions(&self, _regions: Option<Vec<Bounds<Pixels>>>) {
+        // X11 doesn't support input regions
     }
 }

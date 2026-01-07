@@ -26,6 +26,9 @@ mod blade;
 ))]
 mod gl;
 
+#[cfg(feature = "linux-impeller")]
+mod impeller;
+
 #[cfg(any(test, feature = "test-support"))]
 mod test;
 
@@ -92,7 +95,13 @@ pub(crate) use test::*;
 pub(crate) use windows::*;
 
 #[cfg(all(target_os = "linux", feature = "wayland"))]
+pub use linux::foreign_toplevel_management;
+#[cfg(all(target_os = "linux", feature = "wayland"))]
 pub use linux::layer_shell;
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub use linux::session_lock;
+#[cfg(all(target_os = "linux", feature = "wayland"))]
+pub use linux::input_method;
 
 #[cfg(any(test, feature = "test-support"))]
 pub use test::{TestDispatcher, TestScreenCaptureSource, TestScreenCaptureStream};
@@ -575,6 +584,38 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);
 
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    #[allow(dead_code)]
+    fn set_input_regions(&self, _regions: Option<Vec<Bounds<Pixels>>>) {}
+
+    /// Returns the list of foreign toplevel windows currently tracked by the compositor.
+    /// This is only available on Wayland with the zwlr_foreign_toplevel_management_v1 protocol.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    fn foreign_toplevels(&self) -> Vec<foreign_toplevel_management::ForeignToplevelHandle> {
+        Vec::new()
+    }
+
+    /// Returns a handle to the virtual keyboard protocol.
+    /// This is only available on Wayland with the zwp_virtual_keyboard_v1 protocol.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    fn get_virtual_keyboard(&self) -> Option<input_method::VirtualKeyboardHandle> {
+        None
+    }
+
+    /// Returns a handle to the input method protocol.
+    /// This is only available on Wayland with the zwp_input_method_v2 protocol.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    fn get_input_method(&self) -> Option<input_method::InputMethodHandle> {
+        None
+    }
+
+    /// Returns whether the input method is currently active.
+    /// This is only available on Wayland with the zwp_input_method_v2 protocol.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    fn is_input_method_active(&self) -> bool {
+        false
+    }
+
     #[cfg(any(test, feature = "test-support"))]
     fn as_test(&mut self) -> Option<&mut TestWindow> {
         None
@@ -845,6 +886,51 @@ pub(crate) trait PlatformAtlas: Send + Sync {
         build: &mut dyn FnMut() -> Result<Option<(Size<DevicePixels>, Cow<'a, [u8]>)>>,
     ) -> Result<Option<AtlasTile>>;
     fn remove(&self, key: &AtlasKey);
+}
+
+/// A trait for platform-specific renderers that can render a scene to a window.
+/// This trait is implemented by the Blade, Metal, and DirectX renderers.
+#[allow(dead_code)]
+pub(crate) trait PlatformRenderer: Sized {
+    /// Configuration parameters needed to create a new renderer instance.
+    /// For Blade this is BladeSurfaceConfig, for Metal it might be different parameters.
+    type RenderParams;
+
+    /// Render a scene to the window
+    fn draw(&mut self, scene: &Scene);
+
+    /// Get the sprite atlas used for texture management
+    fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas>;
+
+    /// Get information about the GPU this renderer is using
+    fn gpu_specs(&self) -> GpuSpecs;
+
+    /// Update the size of the drawable surface
+    fn update_drawable_size(&mut self, size: Size<DevicePixels>);
+
+    /// Update the transparency setting of the window
+    fn update_transparency(&mut self, transparent: bool);
+
+    /// Destroy the renderer and free its resources
+    fn destroy(&mut self);
+}
+
+/// A trait for platform-specific renderer contexts that manage renderer creation and shared state.
+/// This trait is implemented by context types like BladeContext and Metal's InstanceBufferPool.
+/// The context is typically shared across multiple windows and manages GPU resources.
+#[allow(dead_code)]
+pub(crate) trait PlatformRendererContext: Send + Sync {
+    /// The renderer type that this context creates
+    type Renderer: PlatformRenderer;
+
+    /// Create a new renderer instance for a window
+    fn create_renderer<
+        I: raw_window_handle::HasWindowHandle + raw_window_handle::HasDisplayHandle,
+    >(
+        &self,
+        window: &I,
+        params: <Self::Renderer as PlatformRenderer>::RenderParams,
+    ) -> Result<Self::Renderer>;
 }
 
 struct AtlasTextureList<T> {
@@ -1363,6 +1449,11 @@ pub enum WindowKind {
     /// docks, notifications or wallpapers.
     #[cfg(all(target_os = "linux", feature = "wayland"))]
     LayerShell(layer_shell::LayerShellOptions),
+
+    /// A Wayland SessionLock window, used to create lock screens that take exclusive access
+    /// to all outputs.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    SessionLock(session_lock::SessionLockOptions),
 
     /// A window that appears on top of its parent window and blocks interaction with it
     /// until the modal window is closed

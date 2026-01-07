@@ -1,4 +1,5 @@
 use bitflags::bitflags;
+use serde::{Deserialize, Deserializer, Serialize, de::Error};
 use thiserror::Error;
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 
@@ -6,7 +7,8 @@ use crate::Pixels;
 
 /// The layer the surface is rendered on. Multiple surfaces can share a layer, and ordering within
 /// a single layer is undefined.
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Layer {
     /// The background layer, typically used for wallpapers.
     Background,
@@ -53,6 +55,28 @@ bitflags! {
 impl From<Anchor> for zwlr_layer_surface_v1::Anchor {
     fn from(anchor: Anchor) -> Self {
         Self::from_bits_truncate(anchor.bits())
+    }
+}
+
+impl<'de> Deserialize<'de> for Anchor {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let arr = Vec::<String>::deserialize(deserializer)?;
+        let mut flags = Anchor::empty();
+
+        for s in arr {
+            match s.to_lowercase().as_str() {
+                "top" => flags |= Anchor::TOP,
+                "bottom" => flags |= Anchor::BOTTOM,
+                "left" => flags |= Anchor::LEFT,
+                "right" => flags |= Anchor::RIGHT,
+                other => return Err(D::Error::custom(format!("invalid anchor: {}", other))),
+            }
+        }
+
+        Ok(flags)
     }
 }
 

@@ -50,10 +50,9 @@ use super::{
 
 use crate::platform::{
     LinuxCommon, PlatformWindow,
-    blade::BladeContext,
     linux::{
-        DEFAULT_CURSOR_ICON_NAME, LinuxClient, get_xkb_compose_state, is_within_click_distance,
-        log_cursor_icon_warning, open_uri_internal,
+        DEFAULT_CURSOR_ICON_NAME, LinuxClient, RendererContext, get_xkb_compose_state,
+        is_within_click_distance, log_cursor_icon_warning, open_uri_internal,
         platform::{DOUBLE_CLICK_INTERVAL, SCROLL_LINES},
         reveal_path_internal,
         xdg_desktop_portal::{Event as XDPEvent, XDPEventSource},
@@ -177,7 +176,7 @@ pub struct X11ClientState {
     pub(crate) last_location: Point<Pixels>,
     pub(crate) current_count: usize,
 
-    gpu_context: BladeContext,
+    gpu_context: RendererContext,
 
     pub(crate) scale_factor: f32,
 

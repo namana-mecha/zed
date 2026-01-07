@@ -3,9 +3,9 @@
 
 use super::{BladeAtlas, BladeContext};
 use crate::{
-    Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, Point, PolychromeSprite,
-    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size, Underline,
-    get_gamma_correction_ratios,
+    Background, Bounds, DevicePixels, GpuSpecs, MonochromeSprite, Path, PlatformAtlas,
+    PlatformRenderer, Point, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow,
+    Size, Underline, get_gamma_correction_ratios,
 };
 use blade_graphics as gpu;
 use blade_util::{BufferBelt, BufferBeltDescriptor};
@@ -690,6 +690,9 @@ impl BladeRenderer {
                     );
                     encoder.draw(0, 4, 0, quads.len() as u32);
                 }
+                PrimitiveBatch::Polygons(quads) => {
+                    todo!("Implement Polygons Rendering")
+                }
                 PrimitiveBatch::Shadows(shadows) => {
                     let instance_buf =
                         unsafe { self.instance_belt.alloc_typed(shadows, &self.gpu) };
@@ -1039,5 +1042,33 @@ impl RenderingParameters {
             gamma_ratios,
             grayscale_enhanced_contrast,
         }
+    }
+}
+
+impl PlatformRenderer for BladeRenderer {
+    type RenderParams = BladeSurfaceConfig;
+
+    fn draw(&mut self, scene: &Scene) {
+        self.draw(scene)
+    }
+
+    fn sprite_atlas(&self) -> Arc<dyn PlatformAtlas> {
+        self.sprite_atlas().clone()
+    }
+
+    fn gpu_specs(&self) -> GpuSpecs {
+        self.gpu_specs()
+    }
+
+    fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
+        self.update_drawable_size(size)
+    }
+
+    fn update_transparency(&mut self, transparent: bool) {
+        self.update_transparency(transparent)
+    }
+
+    fn destroy(&mut self) {
+        self.destroy()
     }
 }

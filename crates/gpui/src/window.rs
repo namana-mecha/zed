@@ -1894,6 +1894,69 @@ impl Window {
         self.platform_window.set_client_inset(inset);
     }
 
+    /// Sets the input regions for the window (Wayland only).
+    ///
+    /// Input regions define which areas of the window can receive input events.
+    /// - `None`: Full window accepts input (default)
+    /// - `Some(vec![])`: No input accepted (fully click-through)
+    /// - `Some(vec![bounds1, bounds2, ...])`: Only specified rectangles accept input
+    ///
+    /// This is particularly useful for layer-shell windows like status bars where
+    /// you want only specific UI elements (buttons, panels) to be clickable while
+    /// the rest of the window is transparent to input.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn set_input_regions(&mut self, regions: Option<Vec<Bounds<Pixels>>>) {
+        self.platform_window.set_input_regions(regions);
+    }
+
+    /// Returns the list of foreign toplevel windows currently tracked by the Wayland compositor.
+    ///
+    /// This provides access to all open windows in the session, allowing you to:
+    /// - Query window information (title, app_id, state)
+    /// - Control windows (maximize, minimize, close, activate, etc.)
+    ///
+    /// This is only available on Wayland with the zwlr_foreign_toplevel_management_v1 protocol.
+    /// Returns an empty vector if the protocol is not supported by the compositor.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn foreign_toplevels(
+        &self,
+    ) -> Vec<crate::foreign_toplevel_management::ForeignToplevelHandle> {
+        self.platform_window.foreign_toplevels()
+    }
+
+    /// Returns a handle to the virtual keyboard protocol.
+    ///
+    /// Allows sending keyboard events to the compositor as if they came from a physical keyboard.
+    /// This is only available on Wayland with the zwp_virtual_keyboard_v1 protocol.
+    /// Returns `None` if the protocol is not supported by the compositor.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn get_virtual_keyboard(&self) -> Option<crate::input_method::VirtualKeyboardHandle> {
+        self.platform_window.get_virtual_keyboard()
+    }
+
+    /// Returns a handle to the input method protocol.
+    ///
+    /// Allows the application to act as an input method (IME) and send text input to other applications.
+    /// This is only available on Wayland with the zwp_input_method_v2 protocol.
+    /// Returns `None` if the protocol is not supported by the compositor.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn get_input_method(&self) -> Option<crate::input_method::InputMethodHandle> {
+        self.platform_window.get_input_method()
+    }
+
+    /// Returns whether the input method is currently active.
+    ///
+    /// The input method becomes active when a text input field gains focus in another application,
+    /// and becomes inactive when the text input loses focus. This is useful for virtual keyboards
+    /// to show/hide themselves based on text input activation.
+    ///
+    /// This is only available on Wayland with the zwp_input_method_v2 protocol.
+    /// Returns `false` if the protocol is not supported by the compositor.
+    #[cfg(all(target_os = "linux", feature = "wayland"))]
+    pub fn is_input_method_active(&self) -> bool {
+        self.platform_window.is_input_method_active()
+    }
+
     /// Returns the client_inset value by [`Self::set_client_inset`].
     pub fn client_inset(&self) -> Option<Pixels> {
         self.client_inset
@@ -5382,6 +5445,7 @@ pub fn outline(
     }
 }
 
+/// A polygon to be rendered in the window.
 /// Passed as an argument to [`Window::paint_polygon`].
 #[derive(Clone)]
 pub struct PaintPolygon {

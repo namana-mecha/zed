@@ -36,6 +36,15 @@ use wayland_client::{
         wl_shm_pool, wl_surface,
     },
 };
+use wayland_protocols::ext::session_lock::v1::client::{
+    ext_session_lock_manager_v1, ext_session_lock_surface_v1, ext_session_lock_v1,
+};
+use wayland_protocols::wp::cursor_shape::v1::client::{
+    wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1,
+};
+use wayland_protocols::wp::fractional_scale::v1::client::{
+    wp_fractional_scale_manager_v1, wp_fractional_scale_v1,
+};
 use wayland_protocols::wp::primary_selection::zv1::client::zwp_primary_selection_offer_v1::{
     self, ZwpPrimarySelectionOfferV1,
 };
@@ -56,14 +65,19 @@ use wayland_protocols::xdg::decoration::zv1::client::{
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols::{
-    wp::cursor_shape::v1::client::{wp_cursor_shape_device_v1, wp_cursor_shape_manager_v1},
     xdg::dialog::v1::client::xdg_wm_dialog_v1::{self, XdgWmDialogV1},
-};
-use wayland_protocols::{
-    wp::fractional_scale::v1::client::{wp_fractional_scale_manager_v1, wp_fractional_scale_v1},
     xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
 };
+use wayland_protocols_misc::zwp_input_method_v2::client::{
+    zwp_input_method_manager_v2, zwp_input_method_v2,
+};
+use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
+    zwp_virtual_keyboard_manager_v1, zwp_virtual_keyboard_v1,
+};
 use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+    zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
+};
 use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
 use xkbcommon::xkb::{self, KEYMAP_COMPILE_NO_FLAGS, Keycode};
@@ -73,16 +87,17 @@ use super::{
     window::{ImeInput, WaylandWindowStatePtr},
 };
 
+use crate::platform::{PlatformWindow, linux::RendererContext};
 use crate::{
     AnyWindowHandle, Bounds, Capslock, CursorStyle, DOUBLE_CLICK_INTERVAL, DevicePixels, DisplayId,
     FileDropEvent, ForegroundExecutor, KeyDownEvent, KeyUpEvent, Keystroke, LinuxCommon,
     LinuxKeyboardLayout, Modifiers, ModifiersChangedEvent, MouseButton, MouseDownEvent,
     MouseExitEvent, MouseMoveEvent, MouseUpEvent, NavigationDirection, Pixels, PlatformDisplay,
     PlatformInput, PlatformKeyboardLayout, Point, ResultExt as _, SCROLL_LINES, ScrollDelta,
-    ScrollWheelEvent, Size, TouchPhase, WindowParams, point, profiler, px, size,
+    ScrollWheelEvent, Size, TouchPhase, WindowKind, WindowParams, point, profiler, px, size,
 };
+use crate::{LinuxDispatcher, RunnableVariant, TaskTiming};
 use crate::{
-    RunnableVariant, TaskTiming,
     platform::{PlatformWindow, blade::BladeContext},
 };
 use crate::{
@@ -122,9 +137,15 @@ pub struct Globals {
         Option<wp_fractional_scale_manager_v1::WpFractionalScaleManagerV1>,
     pub decoration_manager: Option<zxdg_decoration_manager_v1::ZxdgDecorationManagerV1>,
     pub layer_shell: Option<zwlr_layer_shell_v1::ZwlrLayerShellV1>,
+    pub session_lock_manager: Option<ext_session_lock_manager_v1::ExtSessionLockManagerV1>,
+    pub foreign_toplevel_manager:
+        Option<zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1>,
     pub blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
     pub dialog: Option<xdg_wm_dialog_v1::XdgWmDialogV1>,
+    pub input_method_manager: Option<zwp_input_method_manager_v2::ZwpInputMethodManagerV2>,
+    pub virtual_keyboard_manager:
+        Option<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1>,
     pub executor: ForegroundExecutor,
 }
 
@@ -162,9 +183,13 @@ impl Globals {
             fractional_scale_manager: globals.bind(&qh, 1..=1, ()).ok(),
             decoration_manager: globals.bind(&qh, 1..=1, ()).ok(),
             layer_shell: globals.bind(&qh, 1..=5, ()).ok(),
+            session_lock_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            foreign_toplevel_manager: globals.bind(&qh, 1..=3, ()).ok(),
             blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
             dialog: globals.bind(&qh, dialog_v..=dialog_v, ()).ok(),
+            input_method_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            virtual_keyboard_manager: globals.bind(&qh, 1..=1, ()).ok(),
             executor,
             qh,
         }
@@ -202,9 +227,10 @@ pub struct Output {
 }
 
 pub(crate) struct WaylandClientState {
-    serial_tracker: SerialTracker,
-    globals: Globals,
-    gpu_context: BladeContext,
+    pub(crate) serial_tracker: SerialTracker,
+    pub(crate) globals: Globals,
+    pub(crate) connection: Connection,
+    gpu_context: RendererContext,
     wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
     wl_pointer: Option<wl_pointer::WlPointer>,
     wl_keyboard: Option<wl_keyboard::WlKeyboard>,
@@ -212,6 +238,11 @@ pub(crate) struct WaylandClientState {
     data_device: Option<wl_data_device::WlDataDevice>,
     primary_selection: Option<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1>,
     text_input: Option<zwp_text_input_v3::ZwpTextInputV3>,
+    pub(crate) input_method: Option<zwp_input_method_v2::ZwpInputMethodV2>,
+    pub(crate) virtual_keyboard: Option<zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1>,
+    pub(crate) input_method_active: bool,
+    pub(crate) surrounding_text: Option<(String, u32, u32)>,
+    pub(crate) content_type: (u32, u32),
     pre_edit_text: Option<String>,
     ime_pre_edit: Option<String>,
     composing: bool,
@@ -219,7 +250,11 @@ pub(crate) struct WaylandClientState {
     windows: HashMap<ObjectId, WaylandWindowStatePtr>,
     // Output to scale mapping
     outputs: HashMap<ObjectId, Output>,
+    output_handles: HashMap<ObjectId, wl_output::WlOutput>,
     in_progress_outputs: HashMap<ObjectId, InProgressOutput>,
+    // Foreign toplevel handles
+    pub(crate) foreign_toplevels:
+        HashMap<ObjectId, super::foreign_toplevel_management::ForeignToplevelHandle>,
     keyboard_layout: LinuxKeyboardLayout,
     keymap_state: Option<xkb::State>,
     compose_state: Option<xkb::compose::State>,
@@ -241,7 +276,7 @@ pub(crate) struct WaylandClientState {
     keyboard_focused_window: Option<WaylandWindowStatePtr>,
     loop_handle: LoopHandle<'static, WaylandClientStatePtr>,
     cursor_style: Option<CursorStyle>,
-    clipboard: Clipboard,
+    pub(crate) clipboard: Clipboard,
     data_offers: Vec<DataOffer<WlDataOffer>>,
     primary_data_offer: Option<DataOffer<ZwpPrimarySelectionOfferV1>>,
     cursor: Cursor,
@@ -352,6 +387,34 @@ impl WaylandClientStatePtr {
         text_input.commit();
     }
 
+    pub fn get_virtual_keyboard(&self) -> Option<super::input_method::VirtualKeyboardHandle> {
+        let client = self.get_client();
+        let state = client.borrow();
+        if state.virtual_keyboard.is_some() {
+            Some(super::input_method::VirtualKeyboardHandle::new(
+                client.clone(),
+            ))
+        } else {
+            None
+        }
+    }
+
+    pub fn get_input_method(&self) -> Option<super::input_method::InputMethodHandle> {
+        let client = self.get_client();
+        let state = client.borrow();
+        if state.input_method.is_some() {
+            Some(super::input_method::InputMethodHandle::new(client.clone()))
+        } else {
+            None
+        }
+    }
+
+    pub fn is_input_method_active(&self) -> bool {
+        let client = self.get_client();
+        let state = client.borrow();
+        state.input_method_active
+    }
+
     pub fn handle_keyboard_layout_change(&self) {
         let client = self.get_client();
         let mut state = client.borrow_mut();
@@ -379,6 +442,12 @@ impl WaylandClientStatePtr {
             state = client.borrow_mut();
             state.common.callbacks.keyboard_layout_change = Some(callback);
         }
+    }
+
+    pub fn get_first_output(&self) -> Option<wl_output::WlOutput> {
+        let client = self.get_client();
+        let state = client.borrow();
+        state.output_handles.values().next().cloned()
     }
 
     pub fn drop_window(&self, surface_id: &ObjectId) {
@@ -592,6 +661,7 @@ impl WaylandClient {
         let mut state = Rc::new(RefCell::new(WaylandClientState {
             serial_tracker: SerialTracker::new(),
             globals,
+            connection: conn.clone(),
             gpu_context,
             wl_seat: seat,
             wl_pointer: None,
@@ -600,11 +670,18 @@ impl WaylandClient {
             data_device,
             primary_selection,
             text_input: None,
+            input_method: None,
+            virtual_keyboard: None,
+            input_method_active: false,
+            surrounding_text: None,
+            content_type: (0, 0),
             pre_edit_text: None,
             ime_pre_edit: None,
             composing: false,
             outputs: HashMap::default(),
+            output_handles: HashMap::default(),
             in_progress_outputs,
+            foreign_toplevels: HashMap::default(),
             windows: HashMap::default(),
             common,
             keyboard_layout: LinuxKeyboardLayout::new(UNKNOWN_KEYBOARD_LAYOUT_NAME),
@@ -655,6 +732,11 @@ impl WaylandClient {
             pending_activation: None,
             event_loop: Some(event_loop),
         }));
+
+        // Process initial events to ensure outputs are configured
+        // This is important for session-lock which requires outputs to be available
+        let client_ptr = WaylandClientStatePtr(Rc::downgrade(&state));
+        event_queue.roundtrip(&mut client_ptr.clone()).ok();
 
         WaylandSource::new(conn, event_queue)
             .insert(handle)
@@ -736,6 +818,13 @@ impl LinuxClient for WaylandClient {
 
         let parent = state.keyboard_focused_window.clone();
 
+        // Get the first output for session-lock windows before borrowing
+        let first_output = if matches!(params.kind, WindowKind::SessionLock(_)) {
+            state.output_handles.values().next().cloned()
+        } else {
+            None
+        };
+
         let (window, surface_id) = WaylandWindow::new(
             handle,
             state.globals.clone(),
@@ -744,6 +833,7 @@ impl LinuxClient for WaylandClient {
             params,
             state.common.appearance,
             parent,
+            first_output,
         )?;
         state.windows.insert(surface_id, window.0.clone());
 
@@ -977,6 +1067,87 @@ impl Dispatch<wl_registry::WlRegistry, GlobalListContents> for WaylandClientStat
     }
 }
 
+impl Dispatch<zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1, ()>
+    for WaylandClientStatePtr
+{
+    fn event(
+        this: &mut Self,
+        _: &zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1,
+        event: <zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        qh: &QueueHandle<Self>,
+    ) {
+        match event {
+            zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } => {
+                let client = this.get_client();
+                let mut state = client.borrow_mut();
+                let handle = super::foreign_toplevel_management::ForeignToplevelHandle::new(
+                    toplevel,
+                    state.wl_seat.clone(),
+                );
+                state.foreign_toplevels.insert(handle.handle().id(), handle);
+            }
+            zwlr_foreign_toplevel_manager_v1::Event::Finished => {
+                log::info!("Foreign toplevel manager finished");
+            }
+            _ => {}
+        }
+    }
+
+    event_created_child!(WaylandClientStatePtr, zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1, [
+        zwlr_foreign_toplevel_manager_v1::EVT_TOPLEVEL_OPCODE => (zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1, ())
+    ]);
+}
+
+impl Dispatch<zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1, ()>
+    for WaylandClientStatePtr
+{
+    fn event(
+        this: &mut Self,
+        handle: &zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1,
+        event: <zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let state = client.borrow();
+
+        let Some(toplevel_handle) = state.foreign_toplevels.get(&handle.id()).cloned() else {
+            return;
+        };
+        drop(state);
+
+        match event {
+            zwlr_foreign_toplevel_handle_v1::Event::Title { title } => {
+                toplevel_handle.update_title(title);
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::AppId { app_id } => {
+                toplevel_handle.update_app_id(app_id);
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::OutputEnter { output } => {
+                toplevel_handle.add_output(&output);
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::OutputLeave { output } => {
+                toplevel_handle.remove_output(&output);
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::State { state } => {
+                toplevel_handle.update_state(state);
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Done => {}
+            zwlr_foreign_toplevel_handle_v1::Event::Closed => {
+                let mut state = client.borrow_mut();
+                state.foreign_toplevels.remove(&handle.id());
+            }
+            zwlr_foreign_toplevel_handle_v1::Event::Parent { parent } => {
+                toplevel_handle.update_parent(parent.as_ref());
+            }
+            _ => {}
+        }
+    }
+}
+
 delegate_noop!(WaylandClientStatePtr: ignore xdg_activation_v1::XdgActivationV1);
 delegate_noop!(WaylandClientStatePtr: ignore wl_compositor::WlCompositor);
 delegate_noop!(WaylandClientStatePtr: ignore wp_cursor_shape_device_v1::WpCursorShapeDeviceV1);
@@ -992,6 +1163,9 @@ delegate_noop!(WaylandClientStatePtr: ignore zxdg_decoration_manager_v1::ZxdgDec
 delegate_noop!(WaylandClientStatePtr: ignore zwlr_layer_shell_v1::ZwlrLayerShellV1);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur_manager::OrgKdeKwinBlurManager);
 delegate_noop!(WaylandClientStatePtr: ignore zwp_text_input_manager_v3::ZwpTextInputManagerV3);
+delegate_noop!(WaylandClientStatePtr: ignore zwp_input_method_manager_v2::ZwpInputMethodManagerV2);
+delegate_noop!(WaylandClientStatePtr: ignore zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1);
+delegate_noop!(WaylandClientStatePtr: ignore zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1);
 delegate_noop!(WaylandClientStatePtr: ignore org_kde_kwin_blur::OrgKdeKwinBlur);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewporter::WpViewporter);
 delegate_noop!(WaylandClientStatePtr: ignore wp_viewport::WpViewport);
@@ -1080,6 +1254,7 @@ impl Dispatch<wl_output::WlOutput, ()> for WaylandClientStatePtr {
             wl_output::Event::Done => {
                 if let Some(complete) = in_progress_output.complete() {
                     state.outputs.insert(output.id(), complete);
+                    state.output_handles.insert(output.id(), output.clone());
                 }
                 state.in_progress_outputs.remove(&output.id());
             }
@@ -1157,6 +1332,62 @@ impl Dispatch<zwlr_layer_surface_v1::ZwlrLayerSurfaceV1, ObjectId> for WaylandCl
     }
 }
 
+impl Dispatch<ext_session_lock_manager_v1::ExtSessionLockManagerV1, ()> for WaylandClientStatePtr {
+    fn event(
+        _: &mut Self,
+        _: &ext_session_lock_manager_v1::ExtSessionLockManagerV1,
+        _event: <ext_session_lock_manager_v1::ExtSessionLockManagerV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+    }
+}
+
+impl Dispatch<ext_session_lock_v1::ExtSessionLockV1, ()> for WaylandClientStatePtr {
+    fn event(
+        _: &mut Self,
+        session_lock: &ext_session_lock_v1::ExtSessionLockV1,
+        event: <ext_session_lock_v1::ExtSessionLockV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        match event {
+            ext_session_lock_v1::Event::Locked => {
+                log::info!("Session locked");
+            }
+            ext_session_lock_v1::Event::Finished => {
+                log::info!("Session lock finished");
+                session_lock.destroy();
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<ext_session_lock_surface_v1::ExtSessionLockSurfaceV1, ObjectId>
+    for WaylandClientStatePtr
+{
+    fn event(
+        this: &mut Self,
+        _: &ext_session_lock_surface_v1::ExtSessionLockSurfaceV1,
+        event: <ext_session_lock_surface_v1::ExtSessionLockSurfaceV1 as Proxy>::Event,
+        surface_id: &ObjectId,
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let mut state = client.borrow_mut();
+        let Some(window) = get_window(&mut state, surface_id) else {
+            return;
+        };
+
+        drop(state);
+        window.handle_session_lock_surface_event(event);
+    }
+}
+
 impl Dispatch<xdg_wm_base::XdgWmBase, ()> for WaylandClientStatePtr {
     fn event(
         _: &mut Self,
@@ -1230,6 +1461,18 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                     .as_ref()
                     .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
 
+                state.input_method = state
+                    .globals
+                    .input_method_manager
+                    .as_ref()
+                    .map(|manager| manager.get_input_method(seat, qh, ()));
+
+                state.virtual_keyboard = state
+                    .globals
+                    .virtual_keyboard_manager
+                    .as_ref()
+                    .map(|manager| manager.create_virtual_keyboard(seat, qh, ()));
+
                 if let Some(wl_keyboard) = &state.wl_keyboard {
                     wl_keyboard.release();
                 }
@@ -1295,6 +1538,30 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 };
                 state.keymap_state = Some(xkb::State::new(&keymap));
                 state.compose_state = get_xkb_compose_state(&xkb_context);
+
+                // Send keymap to virtual keyboard if it exists
+                if let Some(ref vk) = state.virtual_keyboard {
+                    let keymap_str = keymap.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1);
+                    use std::ffi::CString;
+                    use std::io::Write;
+                    use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd};
+
+                    let keymap_bytes = keymap_str.as_bytes();
+
+                    // Create memfd using libc
+                    let name = CString::new("keymap").unwrap();
+                    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
+
+                    if fd >= 0 {
+                        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+                        if file.write_all(keymap_bytes).is_ok() && file.flush().is_ok() {
+                            let size = keymap_bytes.len() as u32;
+                            vk.keymap(1, unsafe { BorrowedFd::borrow_raw(file.as_raw_fd()) }, size);
+                            state.connection.flush().log_err();
+                        }
+                    }
+                }
+
                 drop(state);
 
                 this.handle_keyboard_layout_change();
@@ -1558,6 +1825,45 @@ impl Dispatch<zwp_text_input_v3::ZwpTextInputV3, ()> for WaylandClientStatePtr {
                     drop(state);
                     window.handle_ime(ImeInput::DeleteText);
                 }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        _input_method: &zwp_input_method_v2::ZwpInputMethodV2,
+        event: <zwp_input_method_v2::ZwpInputMethodV2 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let mut state = client.borrow_mut();
+
+        match event {
+            zwp_input_method_v2::Event::Activate => {
+                state.input_method_active = true;
+            }
+            zwp_input_method_v2::Event::Deactivate => {
+                state.input_method_active = false;
+            }
+            zwp_input_method_v2::Event::SurroundingText {
+                text,
+                cursor,
+                anchor,
+            } => {
+                state.surrounding_text = Some((text, cursor, anchor));
+            }
+            zwp_input_method_v2::Event::TextChangeCause { .. } => {}
+            zwp_input_method_v2::Event::ContentType { hint, purpose } => {
+                state.content_type = (hint.into(), purpose.into());
+            }
+            zwp_input_method_v2::Event::Done => {}
+            zwp_input_method_v2::Event::Unavailable => {
+                state.input_method_active = false;
             }
             _ => {}
         }

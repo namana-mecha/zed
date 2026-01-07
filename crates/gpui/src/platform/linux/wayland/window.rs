@@ -13,7 +13,13 @@ use futures::channel::oneshot::Receiver;
 use raw_window_handle as rwh;
 use wayland_backend::client::ObjectId;
 use wayland_client::WEnum;
-use wayland_client::{Proxy, protocol::wl_surface};
+use wayland_client::{
+    Proxy,
+    protocol::{wl_output, wl_surface},
+};
+use wayland_protocols::ext::session_lock::v1::client::{
+    ext_session_lock_surface_v1, ext_session_lock_v1,
+};
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1;
 use wayland_protocols::xdg::shell::client::xdg_surface;
@@ -27,10 +33,11 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 use crate::{
     AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
-    PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel, RequestFrameOptions,
-    ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance, WindowBackgroundAppearance,
-    WindowBounds, WindowControlArea, WindowControls, WindowDecorations, WindowParams, get_window,
-    layer_shell::LayerShellNotSupportedError, px, size,
+    PlatformDisplay, PlatformInput, PlatformRenderer as _, Point, PromptButton, PromptLevel,
+    RequestFrameOptions, ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
+    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
+    WindowParams, get_window, layer_shell::LayerShellNotSupportedError, px,
+    session_lock::SessionLockNotSupportedError, size,
 };
 use crate::{
     Capslock,
@@ -38,7 +45,10 @@ use crate::{
         PlatformAtlas, PlatformInputHandler, PlatformWindow,
         blade::{BladeContext, BladeRenderer, BladeSurfaceConfig},
         gl::GlRenderer,
-        linux::wayland::{display::WaylandDisplay, serial::SerialKind},
+        linux::{
+            self, RendererContext, RendererParams,
+            wayland::{display::WaylandDisplay, serial::SerialKind},
+        },
     },
 };
 use crate::{WindowKind, scene::Scene};
@@ -120,11 +130,14 @@ pub struct WaylandWindowState {
     in_progress_window_controls: Option<WindowControls>,
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
+    #[allow(dead_code)]
+    input_regions: Option<Vec<Bounds<Pixels>>>,
 }
 
 pub enum WaylandSurfaceState {
     Xdg(WaylandXdgSurfaceState),
     LayerShell(WaylandLayerSurfaceState),
+    SessionLock(WaylandSessionLockSurfaceState),
 }
 
 impl WaylandSurfaceState {
@@ -132,7 +145,8 @@ impl WaylandSurfaceState {
         surface: &wl_surface::WlSurface,
         globals: &Globals,
         params: &WindowParams,
-        parent: Option<WaylandWindowStatePtr>,
+        parent: Option<XdgToplevel>,
+        first_output: Option<wl_output::WlOutput>,
     ) -> anyhow::Result<Self> {
         // For layer_shell windows, create a layer surface instead of an xdg surface
         if let WindowKind::LayerShell(options) = &params.kind {
@@ -176,6 +190,37 @@ impl WaylandSurfaceState {
             return Ok(WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState {
                 layer_surface,
             }));
+        }
+
+        // For session-lock windows, create a session lock surface
+        // Note: This is a simplified implementation - a proper session lock would create
+        // a lock surface for each available output
+        if let WindowKind::SessionLock(_options) = &params.kind {
+            let Some(session_lock_manager) = globals.session_lock_manager.as_ref() else {
+                return Err(SessionLockNotSupportedError.into());
+            };
+
+            // Create the session lock
+            let session_lock = session_lock_manager.lock(&globals.qh, ());
+
+            // Use the output provided during window creation
+            // In a real implementation, you should create lock surfaces for ALL outputs
+            if let Some(output) = first_output {
+                // Create a lock surface for this output
+                let lock_surface =
+                    session_lock.get_lock_surface(&surface, &output, &globals.qh, surface.id());
+
+                return Ok(WaylandSurfaceState::SessionLock(
+                    WaylandSessionLockSurfaceState {
+                        session_lock,
+                        lock_surface,
+                    },
+                ));
+            } else {
+                return Err(anyhow::anyhow!(
+                    "No outputs available for session lock - ensure compositor has outputs configured"
+                ));
+            }
         }
 
         // All other WindowKinds result in a regular xdg surface
@@ -238,6 +283,11 @@ pub struct WaylandLayerSurfaceState {
     layer_surface: zwlr_layer_surface_v1::ZwlrLayerSurfaceV1,
 }
 
+pub struct WaylandSessionLockSurfaceState {
+    session_lock: ext_session_lock_v1::ExtSessionLockV1,
+    lock_surface: ext_session_lock_surface_v1::ExtSessionLockSurfaceV1,
+}
+
 impl WaylandSurfaceState {
     fn ack_configure(&self, serial: u32) {
         match self {
@@ -246,6 +296,12 @@ impl WaylandSurfaceState {
             }
             WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface, .. }) => {
                 layer_surface.ack_configure(serial);
+            }
+            WaylandSurfaceState::SessionLock(WaylandSessionLockSurfaceState {
+                lock_surface,
+                ..
+            }) => {
+                lock_surface.ack_configure(serial);
             }
         }
     }
@@ -275,6 +331,12 @@ impl WaylandSurfaceState {
                 // cannot set window position of a layer surface
                 layer_surface.set_size(width as u32, height as u32);
             }
+            WaylandSurfaceState::SessionLock(WaylandSessionLockSurfaceState {
+                lock_surface,
+                ..
+            }) => {
+                // Session lock surfaces cover the entire output, no need to set geometry
+            }
         }
     }
 
@@ -299,6 +361,13 @@ impl WaylandSurfaceState {
             WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface }) => {
                 layer_surface.destroy();
             }
+            WaylandSurfaceState::SessionLock(WaylandSessionLockSurfaceState {
+                lock_surface,
+                session_lock,
+            }) => {
+                lock_surface.destroy();
+                session_lock.unlock_and_destroy();
+            }
         }
     }
 }
@@ -318,7 +387,7 @@ impl WaylandWindowState {
         viewport: Option<wp_viewport::WpViewport>,
         client: WaylandClientStatePtr,
         globals: Globals,
-        gpu_context: &BladeContext,
+        gpu_context: &RendererContext,
         options: WindowParams,
         parent: Option<WaylandWindowStatePtr>,
     ) -> anyhow::Result<Self> {
@@ -333,15 +402,24 @@ impl WaylandWindowState {
                     .display_ptr()
                     .cast::<c_void>(),
             };
-            let config = BladeSurfaceConfig {
-                size: gpu::Extent {
+
+            #[cfg(feature = "linux-impeller")]
+            let params: RendererParams = (
+                options.bounds.size.width.0 as u32,
+                options.bounds.size.height.0 as u32,
+            );
+
+            #[cfg(not(feature = "linux-impeller"))]
+            let params = RendererParams {
+                size: blade_graphics::Extent {
                     width: options.bounds.size.width.0 as u32,
                     height: options.bounds.size.height.0 as u32,
                     depth: 1,
                 },
                 transparent: true,
             };
-            BladeRenderer::new(gpu_context, &raw_window, config)?
+
+            linux::Renderer::new(gpu_context, &raw_window, params)?
         };
 
         #[cfg(feature = "linux-gl")]
@@ -403,6 +481,7 @@ impl WaylandWindowState {
             in_progress_window_controls: None,
             window_controls: WindowControls::default(),
             client_inset: None,
+            input_regions: None,
         })
     }
 
@@ -505,14 +584,16 @@ impl WaylandWindow {
     pub fn new(
         handle: AnyWindowHandle,
         globals: Globals,
-        gpu_context: &BladeContext,
+        gpu_context: &RendererContext,
         client: WaylandClientStatePtr,
         params: WindowParams,
         appearance: WindowAppearance,
-        parent: Option<WaylandWindowStatePtr>,
+        parent: Option<XdgToplevel>,
+        first_output: Option<wl_output::WlOutput>,
     ) -> anyhow::Result<(Self, ObjectId)> {
         let surface = globals.compositor.create_surface(&globals.qh, ());
-        let surface_state = WaylandSurfaceState::new(&surface, &globals, &params, parent.clone())?;
+        let surface_state =
+            WaylandSurfaceState::new(&surface, &globals, &params, parent, first_output)?;
 
         if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
             fractional_scale_manager.get_fractional_scale(&surface, &globals.qh, surface.id());
@@ -522,6 +603,9 @@ impl WaylandWindow {
             .viewporter
             .as_ref()
             .map(|viewporter| viewporter.get_viewport(&surface, &globals.qh, ()));
+
+        // Check if this is a session-lock before params is moved
+        let is_session_lock = matches!(surface_state, WaylandSurfaceState::SessionLock(_));
 
         let this = Self(WaylandWindowStatePtr {
             state: Rc::new(RefCell::new(WaylandWindowState::new(
@@ -540,7 +624,10 @@ impl WaylandWindow {
         });
 
         // Kick things off
-        surface.commit();
+        // Note: Session-lock surfaces should NOT be committed until after configure
+        if !is_session_lock {
+            surface.commit();
+        }
 
         Ok((this, surface.id()))
     }
@@ -835,6 +922,36 @@ impl WaylandWindowStatePtr {
                 true
             }
             _ => false,
+        }
+    }
+
+    pub fn handle_session_lock_surface_event(&self, event: ext_session_lock_surface_v1::Event) {
+        match event {
+            ext_session_lock_surface_v1::Event::Configure {
+                width,
+                height,
+                serial,
+            } => {
+                let size = if width == 0 || height == 0 {
+                    None
+                } else {
+                    Some(size(px(width as f32), px(height as f32)))
+                };
+
+                let mut state = self.state.borrow_mut();
+                state.in_progress_configure = Some(InProgressConfigure {
+                    size,
+                    fullscreen: false,
+                    maximized: false,
+                    resizing: false,
+                    tiling: Tiling::default(),
+                });
+                drop(state);
+
+                // Handle configure event similar to xdg_surface
+                self.handle_xdg_surface_event(xdg_surface::Event::Configure { serial });
+            }
+            _ => {}
         }
     }
 
@@ -1414,6 +1531,35 @@ impl PlatformWindow for WaylandWindow {
     fn gpu_specs(&self) -> Option<GpuSpecs> {
         self.borrow().renderer.gpu_specs().into()
     }
+
+    fn set_input_regions(&self, regions: Option<Vec<Bounds<Pixels>>>) {
+        let mut state = self.borrow_mut();
+        state.input_regions = regions;
+        update_input_region(&mut state);
+        state.surface.commit();
+    }
+
+    fn foreign_toplevels(&self) -> Vec<super::foreign_toplevel_management::ForeignToplevelHandle> {
+        let state = self.borrow();
+        let client = state.client.get_client();
+        let client_state = client.borrow();
+        client_state.foreign_toplevels.values().cloned().collect()
+    }
+
+    fn get_virtual_keyboard(&self) -> Option<super::input_method::VirtualKeyboardHandle> {
+        let state = self.borrow();
+        state.client.get_virtual_keyboard()
+    }
+
+    fn get_input_method(&self) -> Option<super::input_method::InputMethodHandle> {
+        let state = self.borrow();
+        state.client.get_input_method()
+    }
+
+    fn is_input_method_active(&self) -> bool {
+        let state = self.borrow();
+        state.client.is_input_method_active()
+    }
 }
 
 fn update_window(mut state: RefMut<WaylandWindowState>) {
@@ -1464,6 +1610,36 @@ fn update_window(mut state: RefMut<WaylandWindowState>) {
     }
 
     region.destroy();
+}
+
+#[allow(dead_code)]
+fn update_input_region(state: &mut WaylandWindowState) {
+    match &state.input_regions {
+        None => {
+            // Default behavior: full window accepts input
+            state.surface.set_input_region(None);
+        }
+        Some(regions) => {
+            let region = state
+                .globals
+                .compositor
+                .create_region(&state.globals.qh, ());
+
+            for bounds in regions {
+                let bounds_px = bounds.map(|v| v.0 as i32);
+                region.add(
+                    bounds_px.origin.x,
+                    bounds_px.origin.y,
+                    bounds_px.size.width,
+                    bounds_px.size.height,
+                );
+            }
+
+            state.surface.set_input_region(Some(&region));
+
+            region.destroy();
+        }
+    }
 }
 
 impl WindowDecorations {

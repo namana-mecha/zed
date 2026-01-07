@@ -28,5 +28,38 @@ pub(crate) type PlatformScreenCaptureFrame = scap::frame::Frame;
 #[cfg(not(all(feature = "screen-capture", any(feature = "wayland", feature = "x11"))))]
 pub(crate) type PlatformScreenCaptureFrame = ();
 
+// Renderer type - Impeller if feature is enabled, otherwise Blade
+#[cfg(all(any(feature = "wayland", feature = "x11"), feature = "linux-impeller"))]
+pub(crate) type Renderer = crate::platform::impeller::ImpellerRenderer;
+#[cfg(all(
+    any(feature = "wayland", feature = "x11"),
+    not(feature = "linux-impeller")
+))]
+pub(crate) type Renderer = crate::platform::blade::BladeRenderer;
+
+// Context type for renderer initialization
+#[cfg(all(any(feature = "wayland", feature = "x11"), feature = "linux-impeller"))]
+pub(crate) type RendererContext = crate::platform::impeller::ImpellerContext;
+#[cfg(all(
+    any(feature = "wayland", feature = "x11"),
+    not(feature = "linux-impeller")
+))]
+pub(crate) type RendererContext = crate::platform::blade::BladeContext;
+
+// Renderer configuration parameters type
+#[cfg(all(any(feature = "wayland", feature = "x11"), feature = "linux-impeller"))]
+pub(crate) type RendererParams = (u32, u32);
+#[cfg(all(
+    any(feature = "wayland", feature = "x11"),
+    not(feature = "linux-impeller")
+))]
+pub(crate) type RendererParams = crate::platform::blade::BladeSurfaceConfig;
+
+#[cfg(feature = "wayland")]
+pub use wayland::foreign_toplevel_management;
 #[cfg(feature = "wayland")]
 pub use wayland::layer_shell;
+#[cfg(feature = "wayland")]
+pub use wayland::session_lock;
+#[cfg(feature = "wayland")]
+pub use wayland::input_method;
