@@ -54,15 +54,18 @@ pub struct ToplevelInfo {
 pub struct ForeignToplevelHandle {
     handle: Arc<zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1>,
     info: Arc<Mutex<ToplevelInfo>>,
+    seat: Arc<wayland_client::protocol::wl_seat::WlSeat>,
 }
 
 impl ForeignToplevelHandle {
     pub(crate) fn new(
         handle: zwlr_foreign_toplevel_handle_v1::ZwlrForeignToplevelHandleV1,
+        seat: wayland_client::protocol::wl_seat::WlSeat,
     ) -> Self {
         Self {
             handle: Arc::new(handle),
             info: Arc::new(Mutex::new(ToplevelInfo::default())),
+            seat: Arc::new(seat),
         }
     }
 
@@ -127,8 +130,8 @@ impl ForeignToplevelHandle {
     }
 
     /// Requests the compositor to activate the window on the given seat.
-    pub fn activate(&self, seat: &wayland_client::protocol::wl_seat::WlSeat) {
-        self.handle.activate(seat);
+    pub fn activate(&self) {
+        self.handle.activate(&self.seat);
     }
 
     /// Requests the application to close the window.

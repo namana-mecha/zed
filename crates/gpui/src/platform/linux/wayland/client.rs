@@ -64,11 +64,6 @@ use wayland_protocols::xdg::decoration::zv1::client::{
     zxdg_decoration_manager_v1, zxdg_toplevel_decoration_v1,
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
-use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
-use wayland_protocols_wlr::foreign_toplevel::v1::client::{
-    zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
-};
-use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_manager_v2, zwp_input_method_v2,
 };
@@ -78,6 +73,11 @@ use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
 use wayland_protocols::ext::session_lock::v1::client::{
     ext_session_lock_manager_v1, ext_session_lock_v1, ext_session_lock_surface_v1,
 };
+use wayland_protocols_plasma::blur::client::{org_kde_kwin_blur, org_kde_kwin_blur_manager};
+use wayland_protocols_wlr::foreign_toplevel::v1::client::{
+    zwlr_foreign_toplevel_handle_v1, zwlr_foreign_toplevel_manager_v1,
+};
+use wayland_protocols_wlr::layer_shell::v1::client::{zwlr_layer_shell_v1, zwlr_layer_surface_v1};
 use xkbcommon::xkb::ffi::XKB_KEYMAP_FORMAT_TEXT_V1;
 use xkbcommon::xkb::{self, KEYMAP_COMPILE_NO_FLAGS, Keycode};
 
@@ -384,7 +384,9 @@ impl WaylandClientStatePtr {
         let client = self.get_client();
         let state = client.borrow();
         if state.virtual_keyboard.is_some() {
-            Some(super::input_method::VirtualKeyboardHandle::new(client.clone()))
+            Some(super::input_method::VirtualKeyboardHandle::new(
+                client.clone(),
+            ))
         } else {
             None
         }
@@ -1070,8 +1072,10 @@ impl Dispatch<zwlr_foreign_toplevel_manager_v1::ZwlrForeignToplevelManagerV1, ()
             zwlr_foreign_toplevel_manager_v1::Event::Toplevel { toplevel } => {
                 let client = this.get_client();
                 let mut state = client.borrow_mut();
-                let handle =
-                    super::foreign_toplevel_management::ForeignToplevelHandle::new(toplevel);
+                let handle = super::foreign_toplevel_management::ForeignToplevelHandle::new(
+                    toplevel,
+                    state.wl_seat.clone(),
+                );
                 state.foreign_toplevels.insert(handle.handle().id(), handle);
             }
             zwlr_foreign_toplevel_manager_v1::Event::Finished => {
@@ -1834,7 +1838,11 @@ impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for WaylandClientStateP
             zwp_input_method_v2::Event::Deactivate => {
                 state.input_method_active = false;
             }
-            zwp_input_method_v2::Event::SurroundingText { text, cursor, anchor } => {
+            zwp_input_method_v2::Event::SurroundingText {
+                text,
+                cursor,
+                anchor,
+            } => {
                 state.surrounding_text = Some((text, cursor, anchor));
             }
             zwp_input_method_v2::Event::TextChangeCause { .. } => {}
