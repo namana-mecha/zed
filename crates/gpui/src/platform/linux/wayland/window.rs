@@ -145,7 +145,7 @@ impl WaylandSurfaceState {
         surface: &wl_surface::WlSurface,
         globals: &Globals,
         params: &WindowParams,
-        parent: Option<XdgToplevel>,
+        parent: Option<WaylandWindowStatePtr>,
         first_output: Option<wl_output::WlOutput>,
     ) -> anyhow::Result<Self> {
         // For layer_shell windows, create a layer surface instead of an xdg surface
@@ -588,12 +588,12 @@ impl WaylandWindow {
         client: WaylandClientStatePtr,
         params: WindowParams,
         appearance: WindowAppearance,
-        parent: Option<XdgToplevel>,
+        parent: Option<WaylandWindowStatePtr>,
         first_output: Option<wl_output::WlOutput>,
     ) -> anyhow::Result<(Self, ObjectId)> {
         let surface = globals.compositor.create_surface(&globals.qh, ());
         let surface_state =
-            WaylandSurfaceState::new(&surface, &globals, &params, parent, first_output)?;
+            WaylandSurfaceState::new(&surface, &globals, &params, parent.clone(), first_output)?;
 
         if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
             fractional_scale_manager.get_fractional_scale(&surface, &globals.qh, surface.id());
