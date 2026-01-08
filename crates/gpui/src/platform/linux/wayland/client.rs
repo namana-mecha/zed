@@ -65,8 +65,8 @@ use wayland_protocols::xdg::decoration::zv1::client::{
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols::{
-    xdg::dialog::v1::client::xdg_wm_dialog_v1::{self, XdgWmDialogV1},
     xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
+    xdg::dialog::v1::client::xdg_wm_dialog_v1::{self, XdgWmDialogV1},
 };
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_manager_v2, zwp_input_method_v2,
@@ -87,6 +87,7 @@ use super::{
     window::{ImeInput, WaylandWindowStatePtr},
 };
 
+use crate::platform::blade::BladeContext;
 use crate::platform::{PlatformWindow, linux::RendererContext};
 use crate::{
     AnyWindowHandle, Bounds, Capslock, CursorStyle, DOUBLE_CLICK_INTERVAL, DevicePixels, DisplayId,
@@ -97,9 +98,6 @@ use crate::{
     ScrollWheelEvent, Size, TouchPhase, WindowKind, WindowParams, point, profiler, px, size,
 };
 use crate::{LinuxDispatcher, RunnableVariant, TaskTiming};
-use crate::{
-    platform::{PlatformWindow, blade::BladeContext},
-};
 use crate::{
     SharedString,
     platform::linux::{

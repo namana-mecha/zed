@@ -290,7 +290,10 @@ impl<'a> Iterator for BatchIterator<'a> {
                 PrimitiveKind::Shadow,
             ),
             (self.quads_iter.peek().map(|q| q.order), PrimitiveKind::Quad),
-            (self.polygons_iter.peek().map(|p| p.order), PrimitiveKind::Polygon),
+            (
+                self.polygons_iter.peek().map(|p| p.order),
+                PrimitiveKind::Polygon,
+            ),
             (self.paths_iter.peek().map(|q| q.order), PrimitiveKind::Path),
             (
                 self.underlines_iter.peek().map(|u| u.order),
@@ -362,7 +365,9 @@ impl<'a> Iterator for BatchIterator<'a> {
                     polygons_end += 1;
                 }
                 self.polygons_start = polygons_end;
-                Some(PrimitiveBatch::Polygons(&self.polygons[polygons_start..polygons_end]))
+                Some(PrimitiveBatch::Polygons(
+                    &self.polygons[polygons_start..polygons_end],
+                ))
             }
             PrimitiveKind::Path => {
                 let paths_start = self.paths_start;
@@ -481,29 +486,29 @@ pub(crate) enum PrimitiveBatch<'a> {
     Surfaces(&'a [PaintSurface]),
 }
 
-#[derive(Default, Debug, Clone)]
-pub(crate) struct Polygon<P: Clone + Debug + Default + PartialEq = ScaledPixels> {
-    pub order: DrawOrder,
-    pub border_style: BorderStyle,
-    pub bounds: Bounds<P>,
-    pub content_mask: ContentMask<P>,
-    pub background: Background,
-    pub border_color: Hsla,
-    pub border_width: P,
-    pub points: Vec<Point<P>>,
-}
+// #[derive(Default, Debug, Clone)]
+// pub(crate) struct Polygon<P: Clone + Debug + Default + PartialEq = ScaledPixels> {
+//     pub order: DrawOrder,
+//     pub border_style: BorderStyle,
+//     pub bounds: Bounds<P>,
+//     pub content_mask: ContentMask<P>,
+//     pub background: Background,
+//     pub border_color: Hsla,
+//     pub border_width: P,
+//     pub points: Vec<Point<P>>,
+// }
 
-impl<P: Clone + Debug + Default + PartialEq> Polygon<P> {
-    pub fn insert_point(&mut self, point: Point<P>) {
-        self.points.push(point);
-    }
-}
+// impl<P: Clone + Debug + Default + PartialEq> Polygon<P> {
+//     pub fn insert_point(&mut self, point: Point<P>) {
+//         self.points.push(point);
+//     }
+// }
 
-impl From<Polygon<ScaledPixels>> for Primitive {
-    fn from(polygon: Polygon<ScaledPixels>) -> Self {
-        Primitive::Polygon(polygon)
-    }
-}
+// impl From<Polygon<ScaledPixels>> for Primitive {
+//     fn from(polygon: Polygon<ScaledPixels>) -> Self {
+//         Primitive::Polygon(polygon)
+//     }
+// }
 
 #[derive(Default, Debug, Clone)]
 #[repr(C)]
