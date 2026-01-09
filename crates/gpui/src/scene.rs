@@ -524,31 +524,6 @@ impl From<Quad> for Primitive {
     }
 }
 
-#[derive(Default, Debug, Clone)]
-#[repr(C)]
-pub(crate) struct Polygon<P: Clone + std::fmt::Debug + Default + PartialEq = ScaledPixels> {
-    pub order: DrawOrder,
-    pub border_style: BorderStyle,
-    pub bounds: Bounds<P>,
-    pub content_mask: ContentMask<P>,
-    pub background: Background,
-    pub border_color: Hsla,
-    pub border_width: P,
-    pub points: Vec<Point<P>>,
-}
-
-impl<P: Clone + std::fmt::Debug + Default + PartialEq> Polygon<P> {
-    pub fn insert_point(&mut self, point: Point<P>) {
-        self.points.push(point);
-    }
-}
-
-impl From<Polygon<ScaledPixels>> for Primitive {
-    fn from(polygon: Polygon<ScaledPixels>) -> Self {
-        Primitive::Polygon(polygon)
-    }
-}
-
 #[derive(Debug, Clone)]
 #[repr(C)]
 pub(crate) struct Underline {

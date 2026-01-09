@@ -6,7 +6,6 @@ use std::{
     sync::Arc,
 };
 
-use blade_graphics as gpu;
 use collections::{FxHashSet, HashMap};
 use futures::channel::oneshot::Receiver;
 
@@ -23,7 +22,7 @@ use wayland_protocols::ext::session_lock::v1::client::{
 use wayland_protocols::wp::viewporter::client::wp_viewport;
 use wayland_protocols::xdg::decoration::zv1::client::zxdg_toplevel_decoration_v1;
 use wayland_protocols::xdg::shell::client::xdg_surface;
-use wayland_protocols::xdg::shell::client::xdg_toplevel::{self};
+use wayland_protocols::xdg::shell::client::xdg_toplevel;
 use wayland_protocols::{
     wp::fractional_scale::v1::client::wp_fractional_scale_v1,
     xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
@@ -33,7 +32,7 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 use crate::{
     AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
-    PlatformDisplay, PlatformInput, PlatformRenderer as _, Point, PromptButton, PromptLevel,
+    PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel,
     RequestFrameOptions, ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
     WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
     WindowParams, get_window, layer_shell::LayerShellNotSupportedError, px,
@@ -43,10 +42,9 @@ use crate::{
     Capslock,
     platform::{
         PlatformAtlas, PlatformInputHandler, PlatformWindow,
-        blade::{BladeContext, BladeRenderer, BladeSurfaceConfig},
         gl::GlRenderer,
         linux::{
-            self, RendererContext, RendererParams,
+            self, RendererContext,
             wayland::{display::WaylandDisplay, serial::SerialKind},
         },
     },
@@ -145,7 +143,7 @@ impl WaylandSurfaceState {
         surface: &wl_surface::WlSurface,
         globals: &Globals,
         params: &WindowParams,
-        parent: Option<XdgToplevel>,
+        parent: &Option<WaylandWindowStatePtr>,
         first_output: Option<wl_output::WlOutput>,
     ) -> anyhow::Result<Self> {
         // For layer_shell windows, create a layer surface instead of an xdg surface
@@ -332,7 +330,7 @@ impl WaylandSurfaceState {
                 layer_surface.set_size(width as u32, height as u32);
             }
             WaylandSurfaceState::SessionLock(WaylandSessionLockSurfaceState {
-                lock_surface,
+                lock_surface: _,
                 ..
             }) => {
                 // Session lock surfaces cover the entire output, no need to set geometry
@@ -387,7 +385,7 @@ impl WaylandWindowState {
         viewport: Option<wp_viewport::WpViewport>,
         client: WaylandClientStatePtr,
         globals: Globals,
-        gpu_context: &RendererContext,
+        _gpu_context: &RendererContext,
         options: WindowParams,
         parent: Option<WaylandWindowStatePtr>,
     ) -> anyhow::Result<Self> {
@@ -588,12 +586,12 @@ impl WaylandWindow {
         client: WaylandClientStatePtr,
         params: WindowParams,
         appearance: WindowAppearance,
-        parent: Option<XdgToplevel>,
+        parent: Option<WaylandWindowStatePtr>,
         first_output: Option<wl_output::WlOutput>,
     ) -> anyhow::Result<(Self, ObjectId)> {
         let surface = globals.compositor.create_surface(&globals.qh, ());
         let surface_state =
-            WaylandSurfaceState::new(&surface, &globals, &params, parent, first_output)?;
+            WaylandSurfaceState::new(&surface, &globals, &params, &parent, first_output)?;
 
         if let Some(fractional_scale_manager) = globals.fractional_scale_manager.as_ref() {
             fractional_scale_manager.get_fractional_scale(&surface, &globals.qh, surface.id());

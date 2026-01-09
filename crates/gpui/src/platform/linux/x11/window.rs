@@ -5,7 +5,7 @@ use crate::platform::linux::{self, RendererContext, RendererParams};
 use crate::{
     AnyWindowHandle, Bounds, Decorations, DevicePixels, ForegroundExecutor, GpuSpecs, Modifiers,
     Pixels, PlatformAtlas, PlatformDisplay, PlatformInput, PlatformInputHandler,
-    PlatformRenderer as _, PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    PlatformWindow, Point, PromptButton, PromptLevel, RequestFrameOptions,
     ResizeEdge, ScaledPixels, Scene, Size, Tiling, WindowAppearance, WindowBackgroundAppearance,
     WindowBounds, WindowControlArea, WindowDecorations, WindowKind, WindowParams,
     X11ClientStatePtr, px, size,

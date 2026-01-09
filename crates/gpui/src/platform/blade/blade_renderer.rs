@@ -690,7 +690,7 @@ impl BladeRenderer {
                     );
                     encoder.draw(0, 4, 0, quads.len() as u32);
                 }
-                PrimitiveBatch::Polygons(quads) => {
+                PrimitiveBatch::Polygons(_quads) => {
                     todo!("Implement Polygons Rendering")
                 }
                 PrimitiveBatch::Shadows(shadows) => {
@@ -905,9 +905,6 @@ impl BladeRenderer {
                             _encoder.draw(0, 4, 0, 1);
                         }
                     }
-                }
-                PrimitiveBatch::Polygons(_) => {
-                    // Polygons are not yet supported in the blade renderer
                 }
             }
         }

@@ -13,7 +13,7 @@ use glutin::prelude::{GlSurface, PossiblyCurrentGlContext};
 use glutin::surface::{Surface as GlutinSurface, SurfaceAttributesBuilder, WindowSurface};
 
 use crate::{
-    DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite, Polygon, PrimitiveBatch, Quad,
+    DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad,
     ScaledPixels, Scene, Shadow, Size, platform::gl::GlAtlas,
 };
 
