@@ -162,8 +162,8 @@ impl GlAtlasState {
         kind: AtlasTextureKind,
     ) -> &mut GlAtlasTexture {
         const DEFAULT_ATLAS_SIZE: Size<DevicePixels> = Size {
-            width: DevicePixels(1024),
-            height: DevicePixels(1024),
+            width: DevicePixels(4096),
+            height: DevicePixels(4096),
         };
 
         let size = min_size.max(&DEFAULT_ATLAS_SIZE);
