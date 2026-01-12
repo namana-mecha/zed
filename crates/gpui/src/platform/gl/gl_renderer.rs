@@ -13,8 +13,8 @@ use glutin::prelude::{GlSurface, PossiblyCurrentGlContext};
 use glutin::surface::{Surface as GlutinSurface, SurfaceAttributesBuilder, WindowSurface};
 
 use crate::{
-    DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad,
-    ScaledPixels, Scene, Shadow, Size, platform::gl::GlAtlas,
+    DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels,
+    Scene, Shadow, Size, platform::gl::GlAtlas,
 };
 
 pub struct GlSurfaceConfig {
@@ -640,11 +640,14 @@ impl GlRenderer {
                     continue;
                 }
 
-                let center_x = polygon.points.iter().map(|p| p.x.0).sum::<f32>() / polygon.points.len() as f32;
-                let center_y = polygon.points.iter().map(|p| p.y.0).sum::<f32>() / polygon.points.len() as f32;
+                let center_x =
+                    polygon.points.iter().map(|p| p.x.0).sum::<f32>() / polygon.points.len() as f32;
+                let center_y =
+                    polygon.points.iter().map(|p| p.y.0).sum::<f32>() / polygon.points.len() as f32;
 
                 let num_triangles = polygon.points.len();
-                let mut vertices = Vec::with_capacity(num_triangles * 3 * 19);
+                // 3 vertices per triangle * 23 floats per vertex (19 base + 4 for edge points)
+                let mut vertices = Vec::with_capacity(num_triangles * 3 * 23);
 
                 let bg_color = polygon.background.solid.to_rgb();
                 let border_color = polygon.border_color.to_rgb();
@@ -654,65 +657,39 @@ impl GlRenderer {
                     let pt1 = polygon.points[i];
                     let pt2 = polygon.points[next_i];
 
-                    vertices.push(center_x);
-                    vertices.push(center_y);
-                    vertices.push(polygon.bounds.origin.x.0);
-                    vertices.push(polygon.bounds.origin.y.0);
-                    vertices.push(polygon.bounds.size.width.0);
-                    vertices.push(polygon.bounds.size.height.0);
-                    vertices.push(polygon.content_mask.bounds.origin.x.0);
-                    vertices.push(polygon.content_mask.bounds.origin.y.0);
-                    vertices.push(polygon.content_mask.bounds.size.width.0);
-                    vertices.push(polygon.content_mask.bounds.size.height.0);
-                    vertices.push(border_color.r);
-                    vertices.push(border_color.g);
-                    vertices.push(border_color.b);
-                    vertices.push(border_color.a);
-                    vertices.push(polygon.border_width.0);
-                    vertices.push(bg_color.r);
-                    vertices.push(bg_color.g);
-                    vertices.push(bg_color.b);
-                    vertices.push(bg_color.a);
+                    // Helper to push all attributes for a single vertex
+                    // We duplicate this logic 3 times because the current architecture
+                    // doesn't support indexed drawing with per-face attributes easily for this primitive type
+                    let push_vertex = |out: &mut Vec<f32>, x: f32, y: f32| {
+                        out.push(x);
+                        out.push(y);
+                        out.push(polygon.bounds.origin.x.0);
+                        out.push(polygon.bounds.origin.y.0);
+                        out.push(polygon.bounds.size.width.0);
+                        out.push(polygon.bounds.size.height.0);
+                        out.push(polygon.content_mask.bounds.origin.x.0);
+                        out.push(polygon.content_mask.bounds.origin.y.0);
+                        out.push(polygon.content_mask.bounds.size.width.0);
+                        out.push(polygon.content_mask.bounds.size.height.0);
+                        out.push(border_color.r);
+                        out.push(border_color.g);
+                        out.push(border_color.b);
+                        out.push(border_color.a);
+                        out.push(polygon.border_width.0);
+                        out.push(bg_color.r);
+                        out.push(bg_color.g);
+                        out.push(bg_color.b);
+                        out.push(bg_color.a);
+                        // Add edge coordinates for distance calculation in fragment shader
+                        out.push(pt1.x.0);
+                        out.push(pt1.y.0);
+                        out.push(pt2.x.0);
+                        out.push(pt2.y.0);
+                    };
 
-                    vertices.push(pt1.x.0);
-                    vertices.push(pt1.y.0);
-                    vertices.push(polygon.bounds.origin.x.0);
-                    vertices.push(polygon.bounds.origin.y.0);
-                    vertices.push(polygon.bounds.size.width.0);
-                    vertices.push(polygon.bounds.size.height.0);
-                    vertices.push(polygon.content_mask.bounds.origin.x.0);
-                    vertices.push(polygon.content_mask.bounds.origin.y.0);
-                    vertices.push(polygon.content_mask.bounds.size.width.0);
-                    vertices.push(polygon.content_mask.bounds.size.height.0);
-                    vertices.push(border_color.r);
-                    vertices.push(border_color.g);
-                    vertices.push(border_color.b);
-                    vertices.push(border_color.a);
-                    vertices.push(polygon.border_width.0);
-                    vertices.push(bg_color.r);
-                    vertices.push(bg_color.g);
-                    vertices.push(bg_color.b);
-                    vertices.push(bg_color.a);
-
-                    vertices.push(pt2.x.0);
-                    vertices.push(pt2.y.0);
-                    vertices.push(polygon.bounds.origin.x.0);
-                    vertices.push(polygon.bounds.origin.y.0);
-                    vertices.push(polygon.bounds.size.width.0);
-                    vertices.push(polygon.bounds.size.height.0);
-                    vertices.push(polygon.content_mask.bounds.origin.x.0);
-                    vertices.push(polygon.content_mask.bounds.origin.y.0);
-                    vertices.push(polygon.content_mask.bounds.size.width.0);
-                    vertices.push(polygon.content_mask.bounds.size.height.0);
-                    vertices.push(border_color.r);
-                    vertices.push(border_color.g);
-                    vertices.push(border_color.b);
-                    vertices.push(border_color.a);
-                    vertices.push(polygon.border_width.0);
-                    vertices.push(bg_color.r);
-                    vertices.push(bg_color.g);
-                    vertices.push(bg_color.b);
-                    vertices.push(bg_color.a);
+                    push_vertex(&mut vertices, center_x, center_y);
+                    push_vertex(&mut vertices, pt1.x.0, pt1.y.0);
+                    push_vertex(&mut vertices, pt2.x.0, pt2.y.0);
                 }
 
                 self.gl.buffer_data_u8_slice(
@@ -721,10 +698,12 @@ impl GlRenderer {
                     glow::DYNAMIC_DRAW,
                 );
 
-                let stride = 19 * mem::size_of::<f32>() as i32;
+                // 23 floats * 4 bytes
+                let stride = 23 * mem::size_of::<f32>() as i32;
                 self.bind_polygon_attribs(stride);
 
-                self.gl.draw_arrays(glow::TRIANGLES, 0, (num_triangles * 3) as i32);
+                self.gl
+                    .draw_arrays(glow::TRIANGLES, 0, (num_triangles * 3) as i32);
             }
         }
     }
@@ -931,8 +910,30 @@ impl GlRenderer {
                 base_offset + 13 * f32_size,
             );
 
+            // a_edge_p1 (2)
+            self.gl.enable_vertex_attrib_array(6);
+            self.gl.vertex_attrib_pointer_f32(
+                6,
+                2,
+                glow::FLOAT,
+                false,
+                stride,
+                base_offset + 17 * f32_size,
+            );
+
+            // a_edge_p2 (2)
+            self.gl.enable_vertex_attrib_array(7);
+            self.gl.vertex_attrib_pointer_f32(
+                7,
+                2,
+                glow::FLOAT,
+                false,
+                stride,
+                base_offset + 19 * f32_size,
+            );
+
             // Disable unused attributes
-            for i in 6..=9 {
+            for i in 8..=9 {
                 self.gl.disable_vertex_attrib_array(i);
             }
         }
@@ -1367,6 +1368,8 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
         attribute vec4 a_border_color;
         attribute float a_border_width;
         attribute vec4 a_bg_color;
+        attribute vec2 a_edge_p1;
+        attribute vec2 a_edge_p2;
 
         uniform vec2 u_viewport_size;
 
@@ -1376,6 +1379,8 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
         varying vec4 v_border_color;
         varying float v_border_width;
         varying vec4 v_bg_color;
+        varying vec2 v_edge_p1;
+        varying vec2 v_edge_p2;
 
         void main() {
             v_pos = a_position;
@@ -1384,6 +1389,8 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
             v_border_color = a_border_color;
             v_border_width = a_border_width;
             v_bg_color = a_bg_color;
+            v_edge_p1 = a_edge_p1;
+            v_edge_p2 = a_edge_p2;
 
             vec2 ndc = (a_position / u_viewport_size) * 2.0 - 1.0;
             ndc.y = -ndc.y;
@@ -1400,6 +1407,16 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
         varying vec4 v_border_color;
         varying float v_border_width;
         varying vec4 v_bg_color;
+        varying vec2 v_edge_p1;
+        varying vec2 v_edge_p2;
+
+        // Calculate distance from point p to line segment ab
+        float distance_to_segment(vec2 p, vec2 a, vec2 b) {
+            vec2 pa = p - a;
+            vec2 ba = b - a;
+            float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
+            return length(pa - ba * h);
+        }
 
         void main() {
             if (v_pos.x < v_mask.x || v_pos.y < v_mask.y ||
@@ -1407,7 +1424,27 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
                 discard;
             }
 
-            gl_FragColor = v_bg_color;
+            vec4 color = v_bg_color;
+            
+            if (v_border_width > 0.0) {
+                float d = distance_to_segment(v_pos, v_edge_p1, v_edge_p2);
+                
+                // Simple inner border logic with a slight anti-alias edge
+                // Distance d increases as we move away from the edge (inwards towards the center)
+                // If d < border_width, we are inside the border
+                
+                float antialias = 0.5;
+                float border_dist = v_border_width - d;
+                
+                if (border_dist > -antialias) {
+                    float t = clamp(border_dist + antialias, 0.0, 1.0);
+                    // If t is 1.0, we are fully in border. If t is 0.0, we are fully in bg.
+                    // This mix handles the transition.
+                    color = mix(color, v_border_color, t);
+                }
+            }
+
+            gl_FragColor = color;
         }
     "#;
 
@@ -1418,6 +1455,8 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
         (3, "a_border_color"),
         (4, "a_border_width"),
         (5, "a_bg_color"),
+        (6, "a_edge_p1"),
+        (7, "a_edge_p2"),
     ];
 
     let program = compile_program(gl, vs_source, fs_source, &attribs)?;
