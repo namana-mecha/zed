@@ -1,6 +1,7 @@
 use std::{
     cell::{RefCell, RefMut},
     hash::Hash,
+    num::Wrapping,
     os::fd::{AsRawFd, BorrowedFd},
     path::PathBuf,
     rc::{Rc, Weak},
@@ -65,8 +66,8 @@ use wayland_protocols::xdg::decoration::zv1::client::{
 };
 use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_base};
 use wayland_protocols::{
-    xdg::dialog::v1::client::xdg_wm_dialog_v1::{self, XdgWmDialogV1},
     xdg::dialog::v1::client::xdg_dialog_v1::XdgDialogV1,
+    xdg::dialog::v1::client::xdg_wm_dialog_v1::{self, XdgWmDialogV1},
 };
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_manager_v2, zwp_input_method_v2,
@@ -87,6 +88,7 @@ use super::{
     window::{ImeInput, WaylandWindowStatePtr},
 };
 
+use crate::platform::blade::BladeContext;
 use crate::platform::{PlatformWindow, linux::RendererContext};
 use crate::{
     AnyWindowHandle, Bounds, Capslock, CursorStyle, DOUBLE_CLICK_INTERVAL, DevicePixels, DisplayId,
@@ -97,7 +99,6 @@ use crate::{
     ScrollWheelEvent, Size, TouchPhase, WindowKind, WindowParams, point, profiler, px, size,
 };
 use crate::{RunnableVariant, TaskTiming};
-use crate::platform::blade::BladeContext;
 use crate::{
     SharedString,
     platform::linux::{
@@ -1859,7 +1860,13 @@ impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for WaylandClientStateP
             zwp_input_method_v2::Event::ContentType { hint, purpose } => {
                 state.content_type = (hint.into(), purpose.into());
             }
-            zwp_input_method_v2::Event::Done => {}
+            zwp_input_method_v2::Event::Done => {
+                let mut serial = Wrapping(state.serial_tracker.get(SerialKind::InputMethod));
+                serial += Wrapping(1u32);
+                state
+                    .serial_tracker
+                    .update(SerialKind::InputMethod, serial.0);
+            }
             zwp_input_method_v2::Event::Unavailable => {
                 state.input_method_active = false;
             }
