@@ -13,8 +13,8 @@ use glutin::prelude::{GlSurface, PossiblyCurrentGlContext};
 use glutin::surface::{Surface as GlutinSurface, SurfaceAttributesBuilder, WindowSurface};
 
 use crate::{
-    DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels,
-    Scene, Shadow, Size, platform::gl::GlAtlas,
+    platform::gl::GlAtlas, DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite,
+    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size,
 };
 
 pub struct GlSurfaceConfig {
@@ -635,76 +635,139 @@ impl GlRenderer {
                 );
             }
 
+            // Estimate capacity:
+            // - Fill: ~ (N-2)*3 vertices
+            // - Border: N * 3 vertices (Triangle Fan for border container)
+            // * 23 floats per vertex
+            let estimated_capacity = polygons.iter().map(|p| p.points.len() * 6 * 23).sum();
+            let mut vertices = Vec::with_capacity(estimated_capacity);
+
             for polygon in polygons {
                 if polygon.points.len() < 3 {
                     continue;
                 }
 
-                let center_x =
-                    polygon.points.iter().map(|p| p.x.0).sum::<f32>() / polygon.points.len() as f32;
-                let center_y =
-                    polygon.points.iter().map(|p| p.y.0).sum::<f32>() / polygon.points.len() as f32;
-
-                let num_triangles = polygon.points.len();
-                // 3 vertices per triangle * 23 floats per vertex (19 base + 4 for edge points)
-                let mut vertices = Vec::with_capacity(num_triangles * 3 * 23);
-
                 let bg_color = polygon.background.solid.to_rgb();
                 let border_color = polygon.border_color.to_rgb();
+                let border_width = polygon.border_width.0;
 
-                for i in 0..polygon.points.len() {
-                    let next_i = (i + 1) % polygon.points.len();
-                    let pt1 = polygon.points[i];
-                    let pt2 = polygon.points[next_i];
+                // --- 1. FILL PASS (EARCUTR) ---
+                // Earcut expects a flat Vec<f64>: [x0, y0, x1, y1, ...]
+                let flat_coords: Vec<f64> = polygon
+                    .points
+                    .iter()
+                    .flat_map(|p| [p.x.0 as f64, p.y.0 as f64])
+                    .collect();
 
-                    // Helper to push all attributes for a single vertex
-                    // We duplicate this logic 3 times because the current architecture
-                    // doesn't support indexed drawing with per-face attributes easily for this primitive type
-                    let push_vertex = |out: &mut Vec<f32>, x: f32, y: f32| {
-                        out.push(x);
-                        out.push(y);
-                        out.push(polygon.bounds.origin.x.0);
-                        out.push(polygon.bounds.origin.y.0);
-                        out.push(polygon.bounds.size.width.0);
-                        out.push(polygon.bounds.size.height.0);
-                        out.push(polygon.content_mask.bounds.origin.x.0);
-                        out.push(polygon.content_mask.bounds.origin.y.0);
-                        out.push(polygon.content_mask.bounds.size.width.0);
-                        out.push(polygon.content_mask.bounds.size.height.0);
-                        out.push(border_color.r);
-                        out.push(border_color.g);
-                        out.push(border_color.b);
-                        out.push(border_color.a);
-                        out.push(polygon.border_width.0);
-                        out.push(bg_color.r);
-                        out.push(bg_color.g);
-                        out.push(bg_color.b);
-                        out.push(bg_color.a);
-                        // Add edge coordinates for distance calculation in fragment shader
-                        out.push(pt1.x.0);
-                        out.push(pt1.y.0);
-                        out.push(pt2.x.0);
-                        out.push(pt2.y.0);
+                // Perform triangulation using earcutr
+                // arg2 is for holes (empty here), arg3 is dimensions (2D)
+                if let Ok(indices) = earcutr::earcut(&flat_coords, &[], 2) {
+                    // Helper to push a vertex to the buffer for the Fill pass
+                    let mut push_vertex_fill = |x: f32, y: f32| {
+                        vertices.push(x);
+                        vertices.push(y);
+                        vertices.push(polygon.bounds.origin.x.0);
+                        vertices.push(polygon.bounds.origin.y.0);
+                        vertices.push(polygon.bounds.size.width.0);
+                        vertices.push(polygon.bounds.size.height.0);
+                        vertices.push(polygon.content_mask.bounds.origin.x.0);
+                        vertices.push(polygon.content_mask.bounds.origin.y.0);
+                        vertices.push(polygon.content_mask.bounds.size.width.0);
+                        vertices.push(polygon.content_mask.bounds.size.height.0);
+                        vertices.push(border_color.r);
+                        vertices.push(border_color.g);
+                        vertices.push(border_color.b);
+                        vertices.push(border_color.a);
+                        vertices.push(0.0); // Force border width 0 for fill
+                        vertices.push(bg_color.r);
+                        vertices.push(bg_color.g);
+                        vertices.push(bg_color.b);
+                        vertices.push(bg_color.a);
+                        vertices.push(0.0); // Dummy edge p1
+                        vertices.push(0.0);
+                        vertices.push(0.0); // Dummy edge p2
+                        vertices.push(0.0);
                     };
 
-                    push_vertex(&mut vertices, center_x, center_y);
-                    push_vertex(&mut vertices, pt1.x.0, pt1.y.0);
-                    push_vertex(&mut vertices, pt2.x.0, pt2.y.0);
+                    for chunk in indices.chunks(3) {
+                        if chunk.len() == 3 {
+                            let p0 = polygon.points[chunk[0]];
+                            let p1 = polygon.points[chunk[1]];
+                            let p2 = polygon.points[chunk[2]];
+                            push_vertex_fill(p0.x.0, p0.y.0);
+                            push_vertex_fill(p1.x.0, p1.y.0);
+                            push_vertex_fill(p2.x.0, p2.y.0);
+                        }
+                    }
                 }
 
-                self.gl.buffer_data_u8_slice(
-                    glow::ARRAY_BUFFER,
-                    bytemuck::cast_slice(&vertices),
-                    glow::DYNAMIC_DRAW,
-                );
+                // --- 2. BORDER PASS (TRIANGLE FAN / INITIAL IMPLEMENTATION) ---
+                // We use the "initial implementation" logic (Triangle Fan) strictly for drawing the border.
+                // We set the background color to transparent so it acts as an overlay.
+                // This ensures borders are continuous at corners.
+                if border_width > 0.0 {
+                    let center_x = polygon.points.iter().map(|p| p.x.0).sum::<f32>()
+                        / polygon.points.len() as f32;
+                    let center_y = polygon.points.iter().map(|p| p.y.0).sum::<f32>()
+                        / polygon.points.len() as f32;
 
-                // 23 floats * 4 bytes
-                let stride = 23 * mem::size_of::<f32>() as i32;
-                self.bind_polygon_attribs(stride);
+                    let len = polygon.points.len();
 
-                self.gl
-                    .draw_arrays(glow::TRIANGLES, 0, (num_triangles * 3) as i32);
+                    // Helper to push a vertex for the Border pass
+                    let mut push_vertex_border =
+                        |x: f32, y: f32, edge_p1: (f32, f32), edge_p2: (f32, f32)| {
+                            vertices.push(x);
+                            vertices.push(y);
+                            vertices.push(polygon.bounds.origin.x.0);
+                            vertices.push(polygon.bounds.origin.y.0);
+                            vertices.push(polygon.bounds.size.width.0);
+                            vertices.push(polygon.bounds.size.height.0);
+                            vertices.push(polygon.content_mask.bounds.origin.x.0);
+                            vertices.push(polygon.content_mask.bounds.origin.y.0);
+                            vertices.push(polygon.content_mask.bounds.size.width.0);
+                            vertices.push(polygon.content_mask.bounds.size.height.0);
+                            vertices.push(border_color.r);
+                            vertices.push(border_color.g);
+                            vertices.push(border_color.b);
+                            vertices.push(border_color.a);
+                            vertices.push(border_width);
+                            vertices.push(0.0); // Transparent Background R
+                            vertices.push(0.0); // Transparent Background G
+                            vertices.push(0.0); // Transparent Background B
+                            vertices.push(0.0); // Transparent Background A
+                            vertices.push(edge_p1.0);
+                            vertices.push(edge_p1.1);
+                            vertices.push(edge_p2.0);
+                            vertices.push(edge_p2.1);
+                        };
+
+                    for i in 0..len {
+                        let pt1 = polygon.points[i];
+                        let pt2 = polygon.points[(i + 1) % len];
+                        let e1 = (pt1.x.0, pt1.y.0);
+                        let e2 = (pt2.x.0, pt2.y.0);
+
+                        push_vertex_border(center_x, center_y, e1, e2);
+                        push_vertex_border(pt1.x.0, pt1.y.0, e1, e2);
+                        push_vertex_border(pt2.x.0, pt2.y.0, e1, e2);
+                    }
+                }
             }
+
+            self.gl.buffer_data_u8_slice(
+                glow::ARRAY_BUFFER,
+                bytemuck::cast_slice(&vertices),
+                glow::DYNAMIC_DRAW,
+            );
+
+            // 23 floats * 4 bytes
+            let stride = 23 * mem::size_of::<f32>() as i32;
+            self.bind_polygon_attribs(stride);
+
+            // Calculate total vertices
+            let total_vertices = vertices.len() / 23;
+            self.gl
+                .draw_arrays(glow::TRIANGLES, 0, total_vertices as i32);
         }
     }
 
@@ -1311,7 +1374,7 @@ fn create_shadow_program(gl: &glow::Context) -> anyhow::Result<ShadowProgram> {
 
         void main() {
             // Clip logic
-            if (v_pos.x < v_mask.x || v_pos.y < v_mask.y ||
+            if (v_pos.x < v_mask.x || v_pos.y < v_mask.y || 
                 v_pos.x > v_mask.x + v_mask.z || v_pos.y > v_mask.y + v_mask.w) {
                 discard;
             }
@@ -1419,7 +1482,7 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
         }
 
         void main() {
-            if (v_pos.x < v_mask.x || v_pos.y < v_mask.y ||
+            if (v_pos.x < v_mask.x || v_pos.y < v_mask.y || 
                 v_pos.x > v_mask.x + v_mask.z || v_pos.y > v_mask.y + v_mask.w) {
                 discard;
             }
