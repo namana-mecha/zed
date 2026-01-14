@@ -3861,6 +3861,21 @@ impl Window {
                     PlatformInput::FileDrop(FileDropEvent::Exited)
                 }
             },
+            PlatformInput::TouchDown(touch_down) => {
+                self.mouse_position = touch_down.position;
+                self.modifiers = touch_down.modifiers;
+                PlatformInput::TouchDown(touch_down)
+            }
+            PlatformInput::TouchMove(touch_move) => {
+                self.mouse_position = touch_move.position;
+                self.modifiers = touch_move.modifiers;
+                PlatformInput::TouchMove(touch_move)
+            }
+            PlatformInput::TouchUp(touch_up) => {
+                self.mouse_position = touch_up.position;
+                self.modifiers = touch_up.modifiers;
+                PlatformInput::TouchUp(touch_up)
+            }
             PlatformInput::KeyDown(_) | PlatformInput::KeyUp(_) => event,
         };
 

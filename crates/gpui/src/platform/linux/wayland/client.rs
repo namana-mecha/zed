@@ -33,7 +33,7 @@ use wayland_client::{
     Connection, Dispatch, Proxy, QueueHandle, delegate_noop,
     protocol::{
         wl_buffer, wl_compositor, wl_keyboard, wl_pointer, wl_registry, wl_seat, wl_shm,
-        wl_shm_pool, wl_surface,
+        wl_shm_pool, wl_surface, wl_touch,
     },
 };
 use wayland_protocols::ext::session_lock::v1::client::{
@@ -224,6 +224,7 @@ pub(crate) struct WaylandClientState {
     wl_seat: wl_seat::WlSeat, // TODO: Multi seat support
     wl_pointer: Option<wl_pointer::WlPointer>,
     wl_keyboard: Option<wl_keyboard::WlKeyboard>,
+    wl_touch: Option<wl_touch::WlTouch>,
     cursor_shape_device: Option<wp_cursor_shape_device_v1::WpCursorShapeDeviceV1>,
     data_device: Option<wl_data_device::WlDataDevice>,
     primary_selection: Option<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1>,
@@ -250,11 +251,14 @@ pub(crate) struct WaylandClientState {
     compose_state: Option<xkb::compose::State>,
     drag: DragState,
     click: ClickState,
+    touch: ClickState,
     repeat: KeyRepeat,
     pub modifiers: Modifiers,
     pub capslock: Capslock,
     axis_source: AxisSource,
     pub mouse_location: Option<Point<Pixels>>,
+    touch_location: Option<Point<Pixels>>,
+    active_touch_id: Option<i32>,
     continuous_scroll_delta: Option<Point<Pixels>>,
     discrete_scroll_delta: Option<Point<f32>>,
     vertical_modifier: f32,
@@ -468,6 +472,9 @@ impl Drop for WaylandClient {
         if let Some(wl_pointer) = &state.wl_pointer {
             wl_pointer.release();
         }
+        if let Some(wl_touch) = &state.wl_touch {
+            wl_touch.release();
+        }
         if let Some(cursor_shape_device) = &state.cursor_shape_device {
             cursor_shape_device.destroy();
         }
@@ -655,6 +662,7 @@ impl WaylandClient {
             wl_seat: seat,
             wl_pointer: None,
             wl_keyboard: None,
+            wl_touch: None,
             cursor_shape_device: None,
             data_device,
             primary_selection,
@@ -687,6 +695,12 @@ impl WaylandClient {
                 last_location: Point::default(),
                 current_count: 0,
             },
+            touch: ClickState {
+                last_click: Instant::now(),
+                last_mouse_button: None,
+                last_location: Point::default(),
+                current_count: 0,
+            },
             repeat: KeyRepeat {
                 characters_per_second: 16,
                 delay: Duration::from_millis(500),
@@ -704,6 +718,8 @@ impl WaylandClient {
             scroll_event_received: false,
             axis_source: AxisSource::Wheel,
             mouse_location: None,
+            touch_location: None,
+            active_touch_id: None,
             continuous_scroll_delta: None,
             discrete_scroll_delta: None,
             vertical_modifier: -1.0,
@@ -1480,6 +1496,15 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
 
                 state.wl_pointer = Some(pointer);
             }
+            if capabilities.contains(wl_seat::Capability::Touch) {
+                let touch = seat.get_touch(qh, ());
+
+                if let Some(wl_touch) = &state.wl_touch {
+                    wl_touch.release();
+                }
+
+                state.wl_touch = Some(touch);
+            }
         }
     }
 }
@@ -2221,6 +2246,116 @@ impl Dispatch<zxdg_toplevel_decoration_v1::ZxdgToplevelDecorationV1, ObjectId>
 
         drop(state);
         window.handle_toplevel_decoration_event(event);
+    }
+}
+
+impl Dispatch<wl_touch::WlTouch, ()> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        _: &wl_touch::WlTouch,
+        event: wl_touch::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let mut client = this.get_client();
+        let mut state = client.borrow_mut();
+
+        match event {
+            wl_touch::Event::Down { serial, surface, id, x, y, .. } => {
+                // Only track first touch (single-touch mode)
+                if state.active_touch_id.is_some() {
+                    return;
+                }
+
+                state.serial_tracker.update(SerialKind::MousePress, serial);
+
+                // Find window from surface
+                if let Some(window) = get_window(&mut state, &surface.id()) {
+                    let position = point(px(x as f32), px(y as f32));
+                    state.touch_location = Some(position);
+                    state.active_touch_id = Some(id);
+
+                    // Calculate tap count (similar to click count)
+                    if Instant::now().duration_since(state.touch.last_click) < DOUBLE_CLICK_INTERVAL
+                        && is_within_click_distance(state.touch.last_location, position)
+                    {
+                        state.touch.current_count += 1;
+                    } else {
+                        state.touch.current_count = 1;
+                    }
+
+                    state.touch.last_click = Instant::now();
+                    state.touch.last_location = position;
+
+                    // Convert touch to mouse event for compatibility with existing handlers
+                    let input = PlatformInput::MouseDown(MouseDownEvent {
+                        button: MouseButton::Left,
+                        position,
+                        modifiers: state.modifiers,
+                        click_count: state.touch.current_count,
+                        first_mouse: false,
+                    });
+
+                    drop(state);
+                    window.handle_input(input);
+                }
+            }
+
+            wl_touch::Event::Motion { id, x, y, .. } => {
+                // Only track our primary touch
+                if state.active_touch_id != Some(id) {
+                    return;
+                }
+
+                let position = point(px(x as f32), px(y as f32));
+                state.touch_location = Some(position);
+
+                // Find the focused window
+                let window = state.windows.values().next().cloned();
+                if let Some(window) = window {
+                    // Convert touch to mouse event
+                    let input = PlatformInput::MouseMove(MouseMoveEvent {
+                        position,
+                        pressed_button: Some(MouseButton::Left),
+                        modifiers: state.modifiers,
+                    });
+
+                    drop(state);
+                    window.handle_input(input);
+                }
+            }
+
+            wl_touch::Event::Up { id, .. } => {
+                // Only handle our primary touch
+                if state.active_touch_id != Some(id) {
+                    return;
+                }
+
+                let window = state.windows.values().next().cloned();
+                if let Some(window) = window {
+                    // Convert touch to mouse event
+                    let input = PlatformInput::MouseUp(MouseUpEvent {
+                        button: MouseButton::Left,
+                        position: state.touch_location.unwrap_or_default(),
+                        modifiers: state.modifiers,
+                        click_count: state.touch.current_count,
+                    });
+
+                    state.active_touch_id = None;
+
+                    drop(state);
+                    window.handle_input(input);
+                }
+            }
+
+            wl_touch::Event::Cancel { .. } => {
+                state.active_touch_id = None;
+                state.touch_location = None;
+            }
+
+            _ => {}
+        }
     }
 }
 
