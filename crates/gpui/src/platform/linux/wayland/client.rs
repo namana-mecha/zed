@@ -2325,8 +2325,7 @@ impl Dispatch<wl_touch::WlTouch, ()> for WaylandClientStatePtr {
                 state.touch_location = Some(position);
 
                 // Find the focused window
-                let window = state.windows.values().next().cloned();
-                if let Some(window) = window {
+                if let Some(window) = state.mouse_focused_window.clone() {
                     // Convert touch to mouse event
                     let input = PlatformInput::MouseMove(MouseMoveEvent {
                         position,
