@@ -2262,7 +2262,14 @@ impl Dispatch<wl_touch::WlTouch, ()> for WaylandClientStatePtr {
         let mut state = client.borrow_mut();
 
         match event {
-            wl_touch::Event::Down { serial, surface, id, x, y, .. } => {
+            wl_touch::Event::Down {
+                serial,
+                surface,
+                id,
+                x,
+                y,
+                ..
+            } => {
                 // Only track first touch (single-touch mode)
                 if state.active_touch_id.is_some() {
                     return;
@@ -2272,6 +2279,12 @@ impl Dispatch<wl_touch::WlTouch, ()> for WaylandClientStatePtr {
 
                 // Find window from surface
                 if let Some(window) = get_window(&mut state, &surface.id()) {
+                    state.mouse_focused_window = Some(window.clone());
+
+                    if state.enter_token.is_some() {
+                        state.enter_token = None;
+                    }
+
                     let position = point(px(x as f32), px(y as f32));
                     state.touch_location = Some(position);
                     state.active_touch_id = Some(id);
@@ -2332,8 +2345,7 @@ impl Dispatch<wl_touch::WlTouch, ()> for WaylandClientStatePtr {
                     return;
                 }
 
-                let window = state.windows.values().next().cloned();
-                if let Some(window) = window {
+                if let Some(window) = state.mouse_focused_window.clone() {
                     // Convert touch to mouse event
                     let input = PlatformInput::MouseUp(MouseUpEvent {
                         button: MouseButton::Left,
@@ -2343,6 +2355,7 @@ impl Dispatch<wl_touch::WlTouch, ()> for WaylandClientStatePtr {
                     });
 
                     state.active_touch_id = None;
+                    state.mouse_focused_window = None;
 
                     drop(state);
                     window.handle_input(input);
