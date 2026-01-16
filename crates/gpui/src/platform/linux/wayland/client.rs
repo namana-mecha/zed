@@ -1870,9 +1870,19 @@ impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for WaylandClientStateP
         match event {
             zwp_input_method_v2::Event::Activate => {
                 state.input_method_active = true;
+                let windows: Vec<_> = state.windows.values().cloned().collect();
+                drop(state);
+                for window in windows {
+                    window.frame();
+                }
             }
             zwp_input_method_v2::Event::Deactivate => {
                 state.input_method_active = false;
+                let windows: Vec<_> = state.windows.values().cloned().collect();
+                drop(state);
+                for window in windows {
+                    window.frame();
+                }
             }
             zwp_input_method_v2::Event::SurroundingText {
                 text,
@@ -1880,10 +1890,20 @@ impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for WaylandClientStateP
                 anchor,
             } => {
                 state.surrounding_text = Some((text, cursor, anchor));
+                let windows: Vec<_> = state.windows.values().cloned().collect();
+                drop(state);
+                for window in windows {
+                    window.frame();
+                }
             }
             zwp_input_method_v2::Event::TextChangeCause { .. } => {}
             zwp_input_method_v2::Event::ContentType { hint, purpose } => {
                 state.content_type = (hint.into(), purpose.into());
+                let windows: Vec<_> = state.windows.values().cloned().collect();
+                drop(state);
+                for window in windows {
+                    window.frame();
+                }
             }
             zwp_input_method_v2::Event::Done => {
                 let mut serial = Wrapping(state.serial_tracker.get(SerialKind::InputMethod));
@@ -1891,9 +1911,19 @@ impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for WaylandClientStateP
                 state
                     .serial_tracker
                     .update(SerialKind::InputMethod, serial.0);
+                let windows: Vec<_> = state.windows.values().cloned().collect();
+                drop(state);
+                for window in windows {
+                    window.frame();
+                }
             }
             zwp_input_method_v2::Event::Unavailable => {
                 state.input_method_active = false;
+                let windows: Vec<_> = state.windows.values().cloned().collect();
+                drop(state);
+                for window in windows {
+                    window.frame();
+                }
             }
             _ => {}
         }
