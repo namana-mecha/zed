@@ -235,7 +235,7 @@ impl GlAtlasState {
                 }
                 AtlasTextureKind::Polychrome => {
                     internal_format = glow::RGBA;
-                    format = glow::RGBA;
+                    format = glow::BGRA;
                 }
             }
 
@@ -297,7 +297,7 @@ impl GlAtlasState {
             if let Some(gl_texture) = texture_entry.gl_texture {
                 let format = match texture_entry.format {
                     GlTextureFormat::Alpha => glow::ALPHA,
-                    GlTextureFormat::Rgba => glow::RGBA,
+                    GlTextureFormat::Rgba => glow::BGRA,
                 };
 
                 unsafe {
