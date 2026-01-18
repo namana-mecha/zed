@@ -44,7 +44,7 @@ use crate::{
         PlatformAtlas, PlatformInputHandler, PlatformWindow,
         gl::GlRenderer,
         linux::{
-            self, RendererContext,
+            RendererContext, RendererParams,
             wayland::{display::WaylandDisplay, serial::SerialKind},
         },
     },
@@ -125,6 +125,7 @@ pub struct WaylandWindowState {
     hovered: bool,
     in_progress_configure: Option<InProgressConfigure>,
     resize_throttle: bool,
+    frame_callback_pending: bool,
     in_progress_window_controls: Option<WindowControls>,
     window_controls: WindowControls,
     client_inset: Option<Pixels>,
@@ -385,61 +386,45 @@ impl WaylandWindowState {
         viewport: Option<wp_viewport::WpViewport>,
         client: WaylandClientStatePtr,
         globals: Globals,
-        _gpu_context: &RendererContext,
+        gpu_context: &RendererContext,
         options: WindowParams,
         parent: Option<WaylandWindowStatePtr>,
     ) -> anyhow::Result<Self> {
-        #[cfg(not(feature = "linux-gl"))]
-        let renderer = {
-            let raw_window = RawWindow {
-                window: surface.id().as_ptr().cast::<c_void>(),
-                display: surface
-                    .backend()
-                    .upgrade()
-                    .unwrap()
-                    .display_ptr()
-                    .cast::<c_void>(),
-            };
-
-            #[cfg(feature = "linux-impeller")]
-            let params: RendererParams = (
-                options.bounds.size.width.0 as u32,
-                options.bounds.size.height.0 as u32,
-            );
-
-            #[cfg(not(feature = "linux-impeller"))]
-            let params = RendererParams {
-                size: blade_graphics::Extent {
-                    width: options.bounds.size.width.0 as u32,
-                    height: options.bounds.size.height.0 as u32,
-                    depth: 1,
-                },
-                transparent: true,
-            };
-
-            linux::Renderer::new(gpu_context, &raw_window, params)?
+        let raw_window = RawWindow {
+            window: surface.id().as_ptr().cast::<c_void>(),
+            display: surface
+                .backend()
+                .upgrade()
+                .unwrap()
+                .display_ptr()
+                .cast::<c_void>(),
         };
 
         #[cfg(feature = "linux-gl")]
-        let renderer = {
-            use crate::platform::gl::GlSurfaceConfig;
+        let params = RendererParams {
+            width: options.bounds.size.width.0 as u32,
+            height: options.bounds.size.height.0 as u32,
+            transparent: true,
+        };
 
-            let raw_window = RawWindow {
-                window: surface.id().as_ptr().cast::<c_void>(),
-                display: surface
-                    .backend()
-                    .upgrade()
-                    .unwrap()
-                    .display_ptr()
-                    .cast::<c_void>(),
-            };
-            let config = GlSurfaceConfig {
+        #[cfg(all(not(feature = "linux-gl"), feature = "linux-impeller"))]
+        let params: RendererParams = (
+            options.bounds.size.width.0 as u32,
+            options.bounds.size.height.0 as u32,
+        );
+
+        #[cfg(all(not(feature = "linux-gl"), not(feature = "linux-impeller")))]
+        let params = RendererParams {
+            size: blade_graphics::Extent {
                 width: options.bounds.size.width.0 as u32,
                 height: options.bounds.size.height.0 as u32,
-                transparent: true,
-            };
-            GlRenderer::new(config, &raw_window)?
+                depth: 1,
+            },
+            transparent: true,
         };
+
+        use crate::platform::PlatformRendererContext;
+        let renderer = gpu_context.create_renderer(&raw_window, params)?;
 
         if let WaylandSurfaceState::Xdg(ref xdg_state) = surface_state {
             if let Some(title) = options.titlebar.and_then(|titlebar| titlebar.title) {
@@ -471,6 +456,7 @@ impl WaylandWindowState {
             window_bounds: options.bounds,
             in_progress_configure: None,
             resize_throttle: false,
+            frame_callback_pending: false,
             client,
             appearance,
             handle,
@@ -660,14 +646,29 @@ impl WaylandWindowStatePtr {
 
     pub fn frame(&self) {
         let mut state = self.state.borrow_mut();
+
+        // If a frame callback is already pending, skip this request.
+        // The callback handler will call frame() again when the current callback completes.
+        if state.frame_callback_pending {
+            return;
+        }
+
+        // Register a new frame callback with the compositor
         state.surface.frame(&state.globals.qh, state.surface.id());
+        state.frame_callback_pending = true;
         state.resize_throttle = false;
         drop(state);
 
+        // Trigger GPUI rendering immediately
         let mut cb = self.callbacks.borrow_mut();
         if let Some(fun) = cb.request_frame.as_mut() {
             fun(Default::default());
         }
+    }
+
+    pub fn complete_frame_callback(&self) {
+        self.state.borrow_mut().frame_callback_pending = false;
+        self.frame();
     }
 
     pub fn handle_xdg_surface_event(&self, event: xdg_surface::Event) {

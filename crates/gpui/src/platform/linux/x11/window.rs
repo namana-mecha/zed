@@ -686,10 +686,17 @@ impl X11WindowState {
 
                 let size = query_render_extent(xcb, x_window)?;
 
-                #[cfg(feature = "linux-impeller")]
+                #[cfg(feature = "linux-gl")]
+                let params = RendererParams {
+                    width: size.width,
+                    height: size.height,
+                    transparent: false,
+                };
+
+                #[cfg(all(not(feature = "linux-gl"), feature = "linux-impeller"))]
                 let params: RendererParams = (size.width, size.height);
 
-                #[cfg(not(feature = "linux-impeller"))]
+                #[cfg(all(not(feature = "linux-gl"), not(feature = "linux-impeller")))]
                 let params = RendererParams {
                     // Note: this has to be done after the GPU init, or otherwise
                     // the sizes are immediately invalidated.
@@ -701,7 +708,8 @@ impl X11WindowState {
                     transparent: false,
                 };
 
-                linux::Renderer::new(gpu_context, &raw_window, params)?
+                use crate::platform::PlatformRendererContext;
+                gpu_context.create_renderer(&raw_window, params)?
             };
 
             let display = Rc::new(X11Display::new(xcb, scale_factor, x_screen_index)?);

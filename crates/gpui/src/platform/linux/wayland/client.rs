@@ -88,7 +88,6 @@ use super::{
     window::{ImeInput, WaylandWindowStatePtr},
 };
 
-use crate::platform::blade::BladeContext;
 use crate::platform::{PlatformWindow, linux::RendererContext};
 use crate::{
     AnyWindowHandle, Bounds, Capslock, CursorStyle, DOUBLE_CLICK_INTERVAL, DevicePixels, DisplayId,
@@ -612,7 +611,7 @@ impl WaylandClient {
             .unwrap();
 
         // This could be unified with the notification handling in zed/main:fail_to_open_window.
-        let gpu_context = BladeContext::new().notify_err("Unable to init GPU context");
+        let gpu_context = RendererContext::new().notify_err("Unable to init GPU context");
 
         let seat = seat.unwrap();
         let globals = Globals::new(
@@ -1202,7 +1201,8 @@ impl Dispatch<WlCallback, ObjectId> for WaylandClientStatePtr {
         drop(state);
 
         if let wl_callback::Event::Done { .. } = event {
-            window.frame();
+            // Clear the pending flag and request the next frame
+            window.complete_frame_callback();
         }
     }
 }

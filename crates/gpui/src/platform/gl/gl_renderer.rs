@@ -10,7 +10,7 @@ use glutin::context::{
 };
 use glutin::display::{Display, DisplayApiPreference, GlDisplay};
 use glutin::prelude::{GlSurface, PossiblyCurrentGlContext};
-use glutin::surface::{Surface as GlutinSurface, SurfaceAttributesBuilder, WindowSurface};
+use glutin::surface::{Surface as GlutinSurface, SurfaceAttributesBuilder, SwapInterval, WindowSurface};
 
 use crate::{
     platform::gl::GlAtlas, DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite,
@@ -121,6 +121,11 @@ impl GlRenderer {
         );
         let surface = unsafe { display.create_window_surface(&gl_config, &attrs)? };
         let context = not_current_context.make_current(&surface)?;
+
+        // Set swap interval to non-blocking to prevent lag during drag operations
+        surface
+            .set_swap_interval(&context, SwapInterval::DontWait)
+            .map_err(|e| anyhow::anyhow!("Failed to set swap interval: {}", e))?;
 
         let gl = unsafe {
             glow::Context::from_loader_function(|s| {
@@ -1664,5 +1669,33 @@ fn compile_program(
         gl.delete_shader(v);
         gl.delete_shader(f);
         Ok(p)
+    }
+}
+
+impl crate::platform::PlatformRenderer for GlRenderer {
+    type RenderParams = GlSurfaceConfig;
+
+    fn draw(&mut self, scene: &Scene) {
+        self.draw(scene)
+    }
+
+    fn sprite_atlas(&self) -> Arc<dyn crate::platform::PlatformAtlas> {
+        self.atlas.clone()
+    }
+
+    fn gpu_specs(&self) -> GpuSpecs {
+        self.gpu_specs()
+    }
+
+    fn update_drawable_size(&mut self, size: Size<DevicePixels>) {
+        self.update_drawable_size(size)
+    }
+
+    fn update_transparency(&mut self, transparent: bool) {
+        self.update_transparency(transparent)
+    }
+
+    fn destroy(&mut self) {
+        self.destroy()
     }
 }

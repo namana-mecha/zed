@@ -28,29 +28,50 @@ pub(crate) type PlatformScreenCaptureFrame = scap::frame::Frame;
 #[cfg(not(all(feature = "screen-capture", any(feature = "wayland", feature = "x11"))))]
 pub(crate) type PlatformScreenCaptureFrame = ();
 
-// Renderer type - Impeller if feature is enabled, otherwise Blade
-#[cfg(all(any(feature = "wayland", feature = "x11"), feature = "linux-impeller"))]
+// Renderer type - GL if linux-gl is enabled, Impeller if linux-impeller is enabled, otherwise Blade
+#[cfg(all(any(feature = "wayland", feature = "x11"), feature = "linux-gl"))]
+pub(crate) type Renderer = crate::platform::gl::GlRenderer;
+#[cfg(all(
+    any(feature = "wayland", feature = "x11"),
+    not(feature = "linux-gl"),
+    feature = "linux-impeller"
+))]
 pub(crate) type Renderer = crate::platform::impeller::ImpellerRenderer;
 #[cfg(all(
     any(feature = "wayland", feature = "x11"),
+    not(feature = "linux-gl"),
     not(feature = "linux-impeller")
 ))]
 pub(crate) type Renderer = crate::platform::blade::BladeRenderer;
 
 // Context type for renderer initialization
-#[cfg(all(any(feature = "wayland", feature = "x11"), feature = "linux-impeller"))]
+#[cfg(all(any(feature = "wayland", feature = "x11"), feature = "linux-gl"))]
+pub(crate) type RendererContext = crate::platform::gl::GlContext;
+#[cfg(all(
+    any(feature = "wayland", feature = "x11"),
+    not(feature = "linux-gl"),
+    feature = "linux-impeller"
+))]
 pub(crate) type RendererContext = crate::platform::impeller::ImpellerContext;
 #[cfg(all(
     any(feature = "wayland", feature = "x11"),
+    not(feature = "linux-gl"),
     not(feature = "linux-impeller")
 ))]
 pub(crate) type RendererContext = crate::platform::blade::BladeContext;
 
 // Renderer configuration parameters type
-#[cfg(all(any(feature = "wayland", feature = "x11"), feature = "linux-impeller"))]
+#[cfg(all(any(feature = "wayland", feature = "x11"), feature = "linux-gl"))]
+pub(crate) type RendererParams = crate::platform::gl::GlSurfaceConfig;
+#[cfg(all(
+    any(feature = "wayland", feature = "x11"),
+    not(feature = "linux-gl"),
+    feature = "linux-impeller"
+))]
 pub(crate) type RendererParams = (u32, u32);
 #[cfg(all(
     any(feature = "wayland", feature = "x11"),
+    not(feature = "linux-gl"),
     not(feature = "linux-impeller")
 ))]
 pub(crate) type RendererParams = crate::platform::blade::BladeSurfaceConfig;
