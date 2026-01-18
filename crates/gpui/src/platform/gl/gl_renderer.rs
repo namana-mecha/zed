@@ -242,10 +242,6 @@ impl GlRenderer {
             self.gl.enable(glow::BLEND);
 
             // FIX: Use separate blend function for Alpha channel.
-            // RGB:  SrcAlpha * Src + (1 - SrcAlpha) * Dst
-            // Alpha: 1 * SrcAlpha + (1 - SrcAlpha) * DstAlpha
-            // This ensures opacity is accumulated properly, preventing the window background
-            // (desktop) from showing through translucent quads when the window itself is supposed to be opaque.
             self.gl.blend_func_separate(
                 glow::SRC_ALPHA,
                 glow::ONE_MINUS_SRC_ALPHA,
@@ -635,11 +631,8 @@ impl GlRenderer {
                 );
             }
 
-            // Estimate capacity:
-            // - Fill: ~ (N-2)*3 vertices
-            // - Border: N * 3 vertices (Triangle Fan for border container)
-            // * 23 floats per vertex
-            let estimated_capacity = polygons.iter().map(|p| p.points.len() * 6 * 23).sum();
+            // Estimate capacity: Fill (approx 3N) + Border (approx 6N to 12N depending on joins)
+            let estimated_capacity = polygons.iter().map(|p| p.points.len() * 15 * 20).sum();
             let mut vertices = Vec::with_capacity(estimated_capacity);
 
             for polygon in polygons {
@@ -651,18 +644,40 @@ impl GlRenderer {
                 let border_color = polygon.border_color.to_rgb();
                 let border_width = polygon.border_width.0;
 
-                // --- 1. FILL PASS (EARCUTR) ---
-                // Earcut expects a flat Vec<f64>: [x0, y0, x1, y1, ...]
-                let flat_coords: Vec<f64> = polygon
+                // --- 1. CLEAN INPUT ---
+                // Remove consecutive duplicates and extremely close points to avoid NaN in normals
+                // Fix: Collect to Vec first, then dedup in place
+                let mut clean_points: Vec<(f32, f32)> = polygon
                     .points
                     .iter()
-                    .flat_map(|p| [p.x.0 as f64, p.y.0 as f64])
+                    .map(|p| (p.x.0 as f32, p.y.0 as f32))
+                    .collect();
+                clean_points.dedup();
+
+                if clean_points.len() < 3 {
+                    continue;
+                }
+
+                let len = clean_points.len();
+
+                // --- 2. FILL PASS (EARCUTR) ---
+                let flat_coords: Vec<f64> = clean_points
+                    .iter()
+                    .flat_map(|(x, y)| [*x as f64, *y as f64])
                     .collect();
 
-                // Perform triangulation using earcutr
-                // arg2 is for holes (empty here), arg3 is dimensions (2D)
+                // Compute Signed Area to determine winding
+                // Sum (x2 - x1) * (y2 + y1). Result is 2*Area.
+                // In Y-Down (Screen), Positive Area = Clockwise.
+                // In Y-Down, "Standard" math (convex hull) usually results in CW.
+                let mut signed_area = 0.0;
+                for i in 0..len {
+                    let (x1, y1) = clean_points[i];
+                    let (x2, y2) = clean_points[(i + 1) % len];
+                    signed_area += (x2 - x1) * (y2 + y1);
+                }
+
                 if let Ok(indices) = earcutr::earcut(&flat_coords, &[], 2) {
-                    // Helper to push a vertex to the buffer for the Fill pass
                     let mut push_vertex_fill = |x: f32, y: f32| {
                         vertices.push(x);
                         vertices.push(y);
@@ -678,78 +693,188 @@ impl GlRenderer {
                         vertices.push(border_color.g);
                         vertices.push(border_color.b);
                         vertices.push(border_color.a);
-                        vertices.push(0.0); // Force border width 0 for fill
+                        vertices.push(0.0); // Border Width (0 = fill)
                         vertices.push(bg_color.r);
                         vertices.push(bg_color.g);
                         vertices.push(bg_color.b);
                         vertices.push(bg_color.a);
-                        vertices.push(0.0); // Dummy edge p1
-                        vertices.push(0.0);
-                        vertices.push(0.0); // Dummy edge p2
-                        vertices.push(0.0);
+                        vertices.push(0.0); // Border Pos
                     };
 
                     for chunk in indices.chunks(3) {
                         if chunk.len() == 3 {
-                            let p0 = polygon.points[chunk[0]];
-                            let p1 = polygon.points[chunk[1]];
-                            let p2 = polygon.points[chunk[2]];
-                            push_vertex_fill(p0.x.0, p0.y.0);
-                            push_vertex_fill(p1.x.0, p1.y.0);
-                            push_vertex_fill(p2.x.0, p2.y.0);
+                            let (x0, y0) = clean_points[chunk[0]];
+                            let (x1, y1) = clean_points[chunk[1]];
+                            let (x2, y2) = clean_points[chunk[2]];
+                            push_vertex_fill(x0, y0);
+                            push_vertex_fill(x1, y1);
+                            push_vertex_fill(x2, y2);
                         }
                     }
                 }
 
-                // --- 2. BORDER PASS (TRIANGLE FAN / INITIAL IMPLEMENTATION) ---
-                // We use the "initial implementation" logic (Triangle Fan) strictly for drawing the border.
-                // We set the background color to transparent so it acts as an overlay.
-                // This ensures borders are continuous at corners.
+                // --- 3. BORDER PASS (ROBUST OFFSET) ---
                 if border_width > 0.0 {
-                    let center_x = polygon.points.iter().map(|p| p.x.0).sum::<f32>()
-                        / polygon.points.len() as f32;
-                    let center_y = polygon.points.iter().map(|p| p.y.0).sum::<f32>()
-                        / polygon.points.len() as f32;
+                    // Determine Inset Direction:
+                    // If Signed Area > 0 (CW in Y-down), the interior is "Right" of the edge.
+                    // Standard Normal (-dy, dx) points "Left".
+                    // So we need negative normal.
+                    // If Signed Area < 0 (CCW in Y-down), interior is "Left" (Normal).
+                    let inset_sign = if signed_area > 0.0 { -1.0 } else { 1.0 };
 
-                    let len = polygon.points.len();
+                    // Precompute normalized edge directions and normals
+                    let mut edge_normals: Vec<(f32, f32)> = Vec::with_capacity(len);
+                    for i in 0..len {
+                        let (x1, y1) = clean_points[i];
+                        let (x2, y2) = clean_points[(i + 1) % len];
+                        let dx = x2 - x1;
+                        let dy = y2 - y1;
+                        // Fix: Explicitly infer length type
+                        let length = (dx * dx + dy * dy).sqrt();
 
-                    // Helper to push a vertex for the Border pass
-                    let mut push_vertex_border =
-                        |x: f32, y: f32, edge_p1: (f32, f32), edge_p2: (f32, f32)| {
-                            vertices.push(x);
-                            vertices.push(y);
-                            vertices.push(polygon.bounds.origin.x.0);
-                            vertices.push(polygon.bounds.origin.y.0);
-                            vertices.push(polygon.bounds.size.width.0);
-                            vertices.push(polygon.bounds.size.height.0);
-                            vertices.push(polygon.content_mask.bounds.origin.x.0);
-                            vertices.push(polygon.content_mask.bounds.origin.y.0);
-                            vertices.push(polygon.content_mask.bounds.size.width.0);
-                            vertices.push(polygon.content_mask.bounds.size.height.0);
-                            vertices.push(border_color.r);
-                            vertices.push(border_color.g);
-                            vertices.push(border_color.b);
-                            vertices.push(border_color.a);
-                            vertices.push(border_width);
-                            vertices.push(0.0); // Transparent Background R
-                            vertices.push(0.0); // Transparent Background G
-                            vertices.push(0.0); // Transparent Background B
-                            vertices.push(0.0); // Transparent Background A
-                            vertices.push(edge_p1.0);
-                            vertices.push(edge_p1.1);
-                            vertices.push(edge_p2.0);
-                            vertices.push(edge_p2.1);
-                        };
+                        if length < 1e-4 {
+                            // Degenerate edge (should be rare due to dedup)
+                            edge_normals.push((0.0, 0.0));
+                        } else {
+                            // Normal (-dy, dx) points Left
+                            edge_normals.push((-dy / length, dx / length));
+                        }
+                    }
+
+                    // Calculate Inner Corner Points
+                    // For each corner i, we compute the "End of Inner Edge i-1" and "Start of Inner Edge i"
+                    // If Miter is valid, these are the same point.
+                    // If Bevel, they are different.
+                    let mut inner_points = Vec::with_capacity(len);
 
                     for i in 0..len {
-                        let pt1 = polygon.points[i];
-                        let pt2 = polygon.points[(i + 1) % len];
-                        let e1 = (pt1.x.0, pt1.y.0);
-                        let e2 = (pt2.x.0, pt2.y.0);
+                        let curr = clean_points[i];
+                        let prev_idx = (i + len - 1) % len;
+                        let curr_idx = i;
 
-                        push_vertex_border(center_x, center_y, e1, e2);
-                        push_vertex_border(pt1.x.0, pt1.y.0, e1, e2);
-                        push_vertex_border(pt2.x.0, pt2.y.0, e1, e2);
+                        let n_prev = edge_normals[prev_idx];
+                        let n_curr = edge_normals[curr_idx];
+
+                        // Robust Miter / Bevel Logic
+                        // We are offsetting lines by (Normal * sign * width).
+                        // Miter point is intersection of two offset lines.
+                        
+                        // Check angle via dot product
+                        let dot = n_prev.0 * n_curr.0 + n_prev.1 * n_curr.1;
+                        // Miter limit check: 1.0 / sin(theta/2).
+                        // Conservative limit to switch to bevel
+                        let miter_limit = 3.0; 
+                        
+                        // Check if effectively parallel (0 or 180)
+                        let is_parallel = (dot - 1.0).abs() < 1e-4 || (dot + 1.0).abs() < 1e-4;
+                        
+                        // Calculate standard offset vectors
+                        let off_x_prev = n_prev.0 * border_width * inset_sign;
+                        let off_y_prev = n_prev.1 * border_width * inset_sign;
+                        let off_x_curr = n_curr.0 * border_width * inset_sign;
+                        let off_y_curr = n_curr.1 * border_width * inset_sign;
+
+                        if is_parallel {
+                             // Just use the normals directly (Bevel/Flat join logic)
+                             // End of Prev Inner
+                             let p1 = (curr.0 + off_x_prev, curr.1 + off_y_prev);
+                             // Start of Curr Inner
+                             let p2 = (curr.0 + off_x_curr, curr.1 + off_y_curr);
+                             inner_points.push((p1, p2));
+                        } else {
+                            // Miter vector calculation
+                            // u = (n1 + n2).normalized()
+                            // miter_len = width / dot(u, n1)
+                            
+                            let sum_x = n_prev.0 + n_curr.0;
+                            let sum_y = n_prev.1 + n_curr.1;
+                            let sum_len = (sum_x*sum_x + sum_y*sum_y).sqrt();
+                            
+                            let k = if sum_len > 1e-4 {
+                                let u_x = sum_x / sum_len;
+                                let u_y = sum_y / sum_len;
+                                let dot_u_n = u_x * n_prev.0 + u_y * n_prev.1;
+                                if dot_u_n.abs() > 1e-4 {
+                                    1.0 / dot_u_n
+                                } else {
+                                    miter_limit + 1.0 // Force bevel
+                                }
+                            } else {
+                                miter_limit + 1.0 // Force bevel
+                            };
+
+                            if k.abs() <= miter_limit {
+                                // Valid Miter
+                                let miter_x = (sum_x / sum_len) * k * border_width * inset_sign;
+                                let miter_y = (sum_y / sum_len) * k * border_width * inset_sign;
+                                let p = (curr.0 + miter_x, curr.1 + miter_y);
+                                inner_points.push((p, p));
+                            } else {
+                                // Bevel: Use separate offset points
+                                let p1 = (curr.0 + off_x_prev, curr.1 + off_y_prev);
+                                let p2 = (curr.0 + off_x_curr, curr.1 + off_y_curr);
+                                inner_points.push((p1, p2));
+                            }
+                        }
+                    }
+
+                    // Generate Geometry
+                    let mut push_vertex_border = |x: f32, y: f32, border_pos: f32| {
+                         vertices.push(x);
+                         vertices.push(y);
+                         vertices.push(polygon.bounds.origin.x.0);
+                         vertices.push(polygon.bounds.origin.y.0);
+                         vertices.push(polygon.bounds.size.width.0);
+                         vertices.push(polygon.bounds.size.height.0);
+                         vertices.push(polygon.content_mask.bounds.origin.x.0);
+                         vertices.push(polygon.content_mask.bounds.origin.y.0);
+                         vertices.push(polygon.content_mask.bounds.size.width.0);
+                         vertices.push(polygon.content_mask.bounds.size.height.0);
+                         vertices.push(border_color.r);
+                         vertices.push(border_color.g);
+                         vertices.push(border_color.b);
+                         vertices.push(border_color.a);
+                         vertices.push(border_width);
+                         vertices.push(0.0); // BG unused
+                         vertices.push(0.0);
+                         vertices.push(0.0);
+                         vertices.push(0.0);
+                         vertices.push(border_pos); // 0.0=Outer, 1.0=Inner
+                    };
+
+                    for i in 0..len {
+                        let curr_v = clean_points[i];
+                        let next_v = clean_points[(i + 1) % len];
+                        
+                        // 1. Join Geometry (At Vertex i)
+                        // Connects Inner_End of Prev Edge to Inner_Start of Curr Edge
+                        let (inner_prev_end, inner_curr_start) = inner_points[i];
+                        
+                        // If points are different, we have a Bevel triangle
+                        if (inner_prev_end.0 - inner_curr_start.0).abs() > 1e-4 || 
+                           (inner_prev_end.1 - inner_curr_start.1).abs() > 1e-4 {
+                            // Triangle: Outer(i) -> Inner_Prev_End -> Inner_Curr_Start
+                            push_vertex_border(curr_v.0, curr_v.1, 0.0);
+                            push_vertex_border(inner_prev_end.0, inner_prev_end.1, 1.0);
+                            push_vertex_border(inner_curr_start.0, inner_curr_start.1, 1.0);
+                        }
+
+                        // 2. Segment Geometry (Edge i)
+                        // Connects i to i+1
+                        // Outer: curr_v -> next_v
+                        // Inner: inner_curr_start -> inner_next_end
+                        let (inner_next_end, _) = inner_points[(i + 1) % len];
+                        
+                        // Quad as 2 triangles
+                        // T1: OuterCurr, OuterNext, InnerNextEnd
+                        push_vertex_border(curr_v.0, curr_v.1, 0.0);
+                        push_vertex_border(next_v.0, next_v.1, 0.0);
+                        push_vertex_border(inner_next_end.0, inner_next_end.1, 1.0);
+                        
+                        // T2: OuterCurr, InnerNextEnd, InnerCurrStart
+                        push_vertex_border(curr_v.0, curr_v.1, 0.0);
+                        push_vertex_border(inner_next_end.0, inner_next_end.1, 1.0);
+                        push_vertex_border(inner_curr_start.0, inner_curr_start.1, 1.0);
                     }
                 }
             }
@@ -760,12 +885,12 @@ impl GlRenderer {
                 glow::DYNAMIC_DRAW,
             );
 
-            // 23 floats * 4 bytes
-            let stride = 23 * mem::size_of::<f32>() as i32;
+            // 20 floats * 4 bytes
+            let stride = 20 * mem::size_of::<f32>() as i32;
             self.bind_polygon_attribs(stride);
 
             // Calculate total vertices
-            let total_vertices = vertices.len() / 23;
+            let total_vertices = vertices.len() / 20;
             self.gl
                 .draw_arrays(glow::TRIANGLES, 0, total_vertices as i32);
         }
@@ -973,30 +1098,19 @@ impl GlRenderer {
                 base_offset + 13 * f32_size,
             );
 
-            // a_edge_p1 (2)
+            // a_border_pos (1)
             self.gl.enable_vertex_attrib_array(6);
             self.gl.vertex_attrib_pointer_f32(
                 6,
-                2,
+                1,
                 glow::FLOAT,
                 false,
                 stride,
                 base_offset + 17 * f32_size,
             );
 
-            // a_edge_p2 (2)
-            self.gl.enable_vertex_attrib_array(7);
-            self.gl.vertex_attrib_pointer_f32(
-                7,
-                2,
-                glow::FLOAT,
-                false,
-                stride,
-                base_offset + 19 * f32_size,
-            );
-
             // Disable unused attributes
-            for i in 8..=9 {
+            for i in 7..=9 {
                 self.gl.disable_vertex_attrib_array(i);
             }
         }
@@ -1431,8 +1545,7 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
         attribute vec4 a_border_color;
         attribute float a_border_width;
         attribute vec4 a_bg_color;
-        attribute vec2 a_edge_p1;
-        attribute vec2 a_edge_p2;
+        attribute float a_border_pos;
 
         uniform vec2 u_viewport_size;
 
@@ -1442,8 +1555,7 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
         varying vec4 v_border_color;
         varying float v_border_width;
         varying vec4 v_bg_color;
-        varying vec2 v_edge_p1;
-        varying vec2 v_edge_p2;
+        varying float v_border_pos;
 
         void main() {
             v_pos = a_position;
@@ -1452,8 +1564,7 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
             v_border_color = a_border_color;
             v_border_width = a_border_width;
             v_bg_color = a_bg_color;
-            v_edge_p1 = a_edge_p1;
-            v_edge_p2 = a_edge_p2;
+            v_border_pos = a_border_pos;
 
             vec2 ndc = (a_position / u_viewport_size) * 2.0 - 1.0;
             ndc.y = -ndc.y;
@@ -1470,16 +1581,7 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
         varying vec4 v_border_color;
         varying float v_border_width;
         varying vec4 v_bg_color;
-        varying vec2 v_edge_p1;
-        varying vec2 v_edge_p2;
-
-        // Calculate distance from point p to line segment ab
-        float distance_to_segment(vec2 p, vec2 a, vec2 b) {
-            vec2 pa = p - a;
-            vec2 ba = b - a;
-            float h = clamp(dot(pa, ba) / dot(ba, ba), 0.0, 1.0);
-            return length(pa - ba * h);
-        }
+        varying float v_border_pos;
 
         void main() {
             if (v_pos.x < v_mask.x || v_pos.y < v_mask.y || 
@@ -1489,22 +1591,20 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
 
             vec4 color = v_bg_color;
             
+            // If v_border_width > 0, we are rendering the border strip.
+            // In the border pass, we send v_bg_color as transparent (0,0,0,0) and v_border_color as the actual color.
+            // v_border_pos is 0.0 at the outer edge, 1.0 at the inner edge.
+            
             if (v_border_width > 0.0) {
-                float d = distance_to_segment(v_pos, v_edge_p1, v_edge_p2);
+                float dist_px = v_border_pos * v_border_width;
+                float dist_from_inner = v_border_width - dist_px;
                 
-                // Simple inner border logic with a slight anti-alias edge
-                // Distance d increases as we move away from the edge (inwards towards the center)
-                // If d < border_width, we are inside the border
+                // Simple Anti-Aliasing at the inner edge
+                // We assume the outer edge is hard (handled by polygon fill geometry) or we don't AA it to avoid gaps.
+                // Smooth the alpha over the last 1.0 pixel of the width
+                float alpha_factor = smoothstep(0.0, 1.0, dist_from_inner);
                 
-                float antialias = 0.5;
-                float border_dist = v_border_width - d;
-                
-                if (border_dist > -antialias) {
-                    float t = clamp(border_dist + antialias, 0.0, 1.0);
-                    // If t is 1.0, we are fully in border. If t is 0.0, we are fully in bg.
-                    // This mix handles the transition.
-                    color = mix(color, v_border_color, t);
-                }
+                color = vec4(v_border_color.rgb, v_border_color.a * alpha_factor);
             }
 
             gl_FragColor = color;
@@ -1518,8 +1618,7 @@ fn create_polygon_program(gl: &glow::Context) -> anyhow::Result<PolygonProgram> 
         (3, "a_border_color"),
         (4, "a_border_width"),
         (5, "a_bg_color"),
-        (6, "a_edge_p1"),
-        (7, "a_edge_p2"),
+        (6, "a_border_pos"),
     ];
 
     let program = compile_program(gl, vs_source, fs_source, &attribs)?;
