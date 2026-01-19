@@ -646,20 +646,13 @@ impl WaylandWindowStatePtr {
 
     pub fn frame(&self) {
         let mut state = self.state.borrow_mut();
-
-        // If a frame callback is already pending, skip this request.
-        // The callback handler will call frame() again when the current callback completes.
-        if state.frame_callback_pending {
-            return;
+        if !state.frame_callback_pending {
+            state.surface.frame(&state.globals.qh, state.surface.id());
+            state.frame_callback_pending = true;
+            state.resize_throttle = false;
         }
-
-        // Register a new frame callback with the compositor
-        state.surface.frame(&state.globals.qh, state.surface.id());
-        state.frame_callback_pending = true;
-        state.resize_throttle = false;
         drop(state);
 
-        // Trigger GPUI rendering immediately
         let mut cb = self.callbacks.borrow_mut();
         if let Some(fun) = cb.request_frame.as_mut() {
             fun(Default::default());
