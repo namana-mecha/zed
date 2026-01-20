@@ -10,11 +10,13 @@ use glutin::context::{
 };
 use glutin::display::{Display, DisplayApiPreference, GlDisplay};
 use glutin::prelude::{GlSurface, PossiblyCurrentGlContext};
-use glutin::surface::{Surface as GlutinSurface, SurfaceAttributesBuilder, SwapInterval, WindowSurface};
+use glutin::surface::{
+    Surface as GlutinSurface, SurfaceAttributesBuilder, SwapInterval, WindowSurface,
+};
 
 use crate::{
-    platform::gl::GlAtlas, DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite,
-    PrimitiveBatch, Quad, ScaledPixels, Scene, Shadow, Size,
+    DevicePixels, GpuSpecs, MonochromeSprite, PolychromeSprite, PrimitiveBatch, Quad, ScaledPixels,
+    Scene, Shadow, Size, platform::gl::GlAtlas,
 };
 
 pub struct GlSurfaceConfig {
@@ -90,14 +92,16 @@ impl GlRenderer {
                 .map_err(|e| anyhow::anyhow!("Failed to create EGL display: {}", e))?
         };
 
-        let template = ConfigTemplateBuilder::new().with_alpha_size(8).build();
+        let template = ConfigTemplateBuilder::new()
+        .with_swap_interval(Some(0), Some(0))
+            .with_alpha_size(8).build();
 
         let gl_config = unsafe { display.find_configs(template) }
             .map_err(|e| anyhow::anyhow!("Failed to discover OpenGL configs: {}", e))?
             .find(|c| c.depth_size() == 24)
             .ok_or_else(|| anyhow::anyhow!("Couldn't find suitable 24-bit depth config!"))?;
 
-        log::info!(
+        println!(
             "Selected GL Config: api={:?}, depth={}, alpha={}",
             gl_config.api(),
             gl_config.depth_size(),
@@ -120,6 +124,7 @@ impl GlRenderer {
             NonZeroU32::new(config.height.max(1)).unwrap(),
         );
         let surface = unsafe { display.create_window_surface(&gl_config, &attrs)? };
+        println!("{:?}", surface);
         let context = not_current_context.make_current(&surface)?;
 
         // Set swap interval to non-blocking to prevent lag during drag operations
@@ -232,6 +237,11 @@ impl GlRenderer {
             return;
         }
 
+        unsafe {
+            self.gl.finish();
+        }
+
+        let frame_start = std::time::Instant::now();
         self.atlas.before_frame(&self.gl);
 
         unsafe {
@@ -275,9 +285,9 @@ impl GlRenderer {
                     texture_id,
                     sprites,
                 } => self.draw_polychrome_sprites(texture_id, sprites),
-                PrimitiveBatch::Quads(quads) => self.draw_quads(quads),
-                PrimitiveBatch::Polygons(polygons) => self.draw_polygons(polygons),
-                PrimitiveBatch::Shadows(shadows) => self.draw_shadows(shadows),
+                // PrimitiveBatch::Quads(quads) => self.draw_quads(quads),
+                // PrimitiveBatch::Polygons(polygons) => self.draw_polygons(polygons),
+                // PrimitiveBatch::Shadows(shadows) => self.draw_shadows(shadows),
                 _ => {}
             }
         }
@@ -286,7 +296,9 @@ impl GlRenderer {
             self.gl.bind_buffer(glow::ARRAY_BUFFER, None);
             self.gl.bind_buffer(glow::ELEMENT_ARRAY_BUFFER, None);
             self.gl.bind_vertex_array(None);
+            self.gl.finish();
         }
+        // println!("{:?}", std::time::Instant::now() - frame_start);
 
         if let Err(e) = self._surface.swap_buffers(&self._context) {
             log::error!("Swap buffers failed: {}", e);
@@ -763,16 +775,16 @@ impl GlRenderer {
                         // Robust Miter / Bevel Logic
                         // We are offsetting lines by (Normal * sign * width).
                         // Miter point is intersection of two offset lines.
-                        
+
                         // Check angle via dot product
                         let dot = n_prev.0 * n_curr.0 + n_prev.1 * n_curr.1;
                         // Miter limit check: 1.0 / sin(theta/2).
                         // Conservative limit to switch to bevel
-                        let miter_limit = 3.0; 
-                        
+                        let miter_limit = 3.0;
+
                         // Check if effectively parallel (0 or 180)
                         let is_parallel = (dot - 1.0).abs() < 1e-4 || (dot + 1.0).abs() < 1e-4;
-                        
+
                         // Calculate standard offset vectors
                         let off_x_prev = n_prev.0 * border_width * inset_sign;
                         let off_y_prev = n_prev.1 * border_width * inset_sign;
@@ -780,21 +792,21 @@ impl GlRenderer {
                         let off_y_curr = n_curr.1 * border_width * inset_sign;
 
                         if is_parallel {
-                             // Just use the normals directly (Bevel/Flat join logic)
-                             // End of Prev Inner
-                             let p1 = (curr.0 + off_x_prev, curr.1 + off_y_prev);
-                             // Start of Curr Inner
-                             let p2 = (curr.0 + off_x_curr, curr.1 + off_y_curr);
-                             inner_points.push((p1, p2));
+                            // Just use the normals directly (Bevel/Flat join logic)
+                            // End of Prev Inner
+                            let p1 = (curr.0 + off_x_prev, curr.1 + off_y_prev);
+                            // Start of Curr Inner
+                            let p2 = (curr.0 + off_x_curr, curr.1 + off_y_curr);
+                            inner_points.push((p1, p2));
                         } else {
                             // Miter vector calculation
                             // u = (n1 + n2).normalized()
                             // miter_len = width / dot(u, n1)
-                            
+
                             let sum_x = n_prev.0 + n_curr.0;
                             let sum_y = n_prev.1 + n_curr.1;
-                            let sum_len = (sum_x*sum_x + sum_y*sum_y).sqrt();
-                            
+                            let sum_len = (sum_x * sum_x + sum_y * sum_y).sqrt();
+
                             let k = if sum_len > 1e-4 {
                                 let u_x = sum_x / sum_len;
                                 let u_y = sum_y / sum_len;
@@ -825,39 +837,40 @@ impl GlRenderer {
 
                     // Generate Geometry
                     let mut push_vertex_border = |x: f32, y: f32, border_pos: f32| {
-                         vertices.push(x);
-                         vertices.push(y);
-                         vertices.push(polygon.bounds.origin.x.0);
-                         vertices.push(polygon.bounds.origin.y.0);
-                         vertices.push(polygon.bounds.size.width.0);
-                         vertices.push(polygon.bounds.size.height.0);
-                         vertices.push(polygon.content_mask.bounds.origin.x.0);
-                         vertices.push(polygon.content_mask.bounds.origin.y.0);
-                         vertices.push(polygon.content_mask.bounds.size.width.0);
-                         vertices.push(polygon.content_mask.bounds.size.height.0);
-                         vertices.push(border_color.r);
-                         vertices.push(border_color.g);
-                         vertices.push(border_color.b);
-                         vertices.push(border_color.a);
-                         vertices.push(border_width);
-                         vertices.push(0.0); // BG unused
-                         vertices.push(0.0);
-                         vertices.push(0.0);
-                         vertices.push(0.0);
-                         vertices.push(border_pos); // 0.0=Outer, 1.0=Inner
+                        vertices.push(x);
+                        vertices.push(y);
+                        vertices.push(polygon.bounds.origin.x.0);
+                        vertices.push(polygon.bounds.origin.y.0);
+                        vertices.push(polygon.bounds.size.width.0);
+                        vertices.push(polygon.bounds.size.height.0);
+                        vertices.push(polygon.content_mask.bounds.origin.x.0);
+                        vertices.push(polygon.content_mask.bounds.origin.y.0);
+                        vertices.push(polygon.content_mask.bounds.size.width.0);
+                        vertices.push(polygon.content_mask.bounds.size.height.0);
+                        vertices.push(border_color.r);
+                        vertices.push(border_color.g);
+                        vertices.push(border_color.b);
+                        vertices.push(border_color.a);
+                        vertices.push(border_width);
+                        vertices.push(0.0); // BG unused
+                        vertices.push(0.0);
+                        vertices.push(0.0);
+                        vertices.push(0.0);
+                        vertices.push(border_pos); // 0.0=Outer, 1.0=Inner
                     };
 
                     for i in 0..len {
                         let curr_v = clean_points[i];
                         let next_v = clean_points[(i + 1) % len];
-                        
+
                         // 1. Join Geometry (At Vertex i)
                         // Connects Inner_End of Prev Edge to Inner_Start of Curr Edge
                         let (inner_prev_end, inner_curr_start) = inner_points[i];
-                        
+
                         // If points are different, we have a Bevel triangle
-                        if (inner_prev_end.0 - inner_curr_start.0).abs() > 1e-4 || 
-                           (inner_prev_end.1 - inner_curr_start.1).abs() > 1e-4 {
+                        if (inner_prev_end.0 - inner_curr_start.0).abs() > 1e-4
+                            || (inner_prev_end.1 - inner_curr_start.1).abs() > 1e-4
+                        {
                             // Triangle: Outer(i) -> Inner_Prev_End -> Inner_Curr_Start
                             push_vertex_border(curr_v.0, curr_v.1, 0.0);
                             push_vertex_border(inner_prev_end.0, inner_prev_end.1, 1.0);
@@ -869,13 +882,13 @@ impl GlRenderer {
                         // Outer: curr_v -> next_v
                         // Inner: inner_curr_start -> inner_next_end
                         let (inner_next_end, _) = inner_points[(i + 1) % len];
-                        
+
                         // Quad as 2 triangles
                         // T1: OuterCurr, OuterNext, InnerNextEnd
                         push_vertex_border(curr_v.0, curr_v.1, 0.0);
                         push_vertex_border(next_v.0, next_v.1, 0.0);
                         push_vertex_border(inner_next_end.0, inner_next_end.1, 1.0);
-                        
+
                         // T2: OuterCurr, InnerNextEnd, InnerCurrStart
                         push_vertex_border(curr_v.0, curr_v.1, 0.0);
                         push_vertex_border(inner_next_end.0, inner_next_end.1, 1.0);
