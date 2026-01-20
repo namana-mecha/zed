@@ -155,6 +155,8 @@ impl PlatformRenderer for ImpellerRenderer {
                 .expect("Failed to make GL context current");
         }
 
+        self.sprite_atlas.before_frame(&self.impeller_context);
+
         let mut builder = DisplayListBuilder::new(None);
         let mut paint = Paint::default();
 
