@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::Result;
 use gpui::{
@@ -33,10 +33,30 @@ const ARROW_CIRCLE_SVG: &str = concat!(
     "/examples/image/arrow_circle.svg"
 );
 
-struct AnimationExample {}
+struct AnimationExample {
+    last_frame_time: Instant,
+    frame_times: Vec<Duration>,
+    fps: f64,
+}
 
 impl Render for AnimationExample {
-    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let now = Instant::now();
+        let frame_time = now.duration_since(self.last_frame_time);
+        self.last_frame_time = now;
+
+        self.frame_times.push(frame_time);
+        if self.frame_times.len() > 60 {
+            self.frame_times.remove(0);
+        }
+
+        let average_frame_time: Duration = self.frame_times.iter().sum::<Duration>() / self.frame_times.len() as u32;
+        if average_frame_time.as_secs_f64() > 0.0 {
+            self.fps = 1.0 / average_frame_time.as_secs_f64();
+        }
+
+        cx.notify();
+
         div()
             .flex()
             .flex_col()
@@ -64,6 +84,7 @@ impl Render for AnimationExample {
                             .text_xl()
                             .gap_4()
                             .child("Hello Animation")
+                            .child(format!("FPS: {:.1}", self.fps))
                             .child(
                                 svg()
                                     .size_20()
@@ -114,7 +135,11 @@ fn main() {
             };
             cx.open_window(options, |_, cx| {
                 cx.activate(false);
-                cx.new(|_| AnimationExample {})
+                cx.new(|_| AnimationExample {
+                    last_frame_time: Instant::now(),
+                    frame_times: Vec::new(),
+                    fps: 0.0,
+                })
             })
             .unwrap();
         });
