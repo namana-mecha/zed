@@ -32,11 +32,10 @@ use wayland_protocols_wlr::layer_shell::v1::client::zwlr_layer_surface_v1;
 
 use crate::{
     AnyWindowHandle, Bounds, Decorations, Globals, GpuSpecs, Modifiers, Output, Pixels,
-    PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel,
-    RequestFrameOptions, ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance,
-    WindowBackgroundAppearance, WindowBounds, WindowControlArea, WindowControls, WindowDecorations,
-    WindowParams, get_window, layer_shell::LayerShellNotSupportedError, px,
-    session_lock::SessionLockNotSupportedError, size,
+    PlatformDisplay, PlatformInput, Point, PromptButton, PromptLevel, RequestFrameOptions,
+    ResizeEdge, Size, Tiling, WaylandClientStatePtr, WindowAppearance, WindowBackgroundAppearance,
+    WindowBounds, WindowControlArea, WindowControls, WindowDecorations, WindowParams, get_window,
+    layer_shell::LayerShellNotSupportedError, px, session_lock::SessionLockNotSupportedError, size,
 };
 use crate::{
     Capslock,
