@@ -969,6 +969,10 @@ impl WaylandWindowStatePtr {
         bounds
     }
 
+    pub fn has_input_handler(&self) -> bool {
+        self.state.borrow().input_handler.is_some()
+    }
+
     pub fn set_size_and_scale(&self, size: Option<Size<Pixels>>, scale: Option<f32>) {
         let (size, scale) = {
             let mut state = self.state.borrow_mut();
@@ -1193,11 +1197,23 @@ impl PlatformWindow for WaylandWindow {
     }
 
     fn set_input_handler(&mut self, input_handler: PlatformInputHandler) {
-        self.borrow_mut().input_handler = Some(input_handler);
+        let client = {
+            let mut state = self.borrow_mut();
+            state.input_handler = Some(input_handler);
+            state.client.clone()
+        };
+        client.enable_ime();
     }
 
     fn take_input_handler(&mut self) -> Option<PlatformInputHandler> {
-        self.borrow_mut().input_handler.take()
+        let (handler, client) = {
+            let mut state = self.borrow_mut();
+            (state.input_handler.take(), state.client.clone())
+        };
+        if handler.is_some() {
+            client.disable_ime();
+        }
+        handler
     }
 
     fn prompt(

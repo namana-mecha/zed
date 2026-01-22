@@ -336,10 +336,14 @@ impl WaylandClientStatePtr {
             return;
         };
 
-        text_input.enable();
-        text_input.set_content_type(ContentHint::None, ContentPurpose::Normal);
         if let Some(window) = state.keyboard_focused_window.clone() {
             drop(state);
+            if !window.has_input_handler() {
+                client.borrow_mut().text_input = Some(text_input);
+                return;
+            }
+            text_input.enable();
+            text_input.set_content_type(ContentHint::None, ContentPurpose::Normal);
             if let Some(area) = window.get_ime_area() {
                 text_input.set_cursor_rectangle(
                     area.origin.x.0 as i32,
