@@ -108,10 +108,10 @@ impl Render for SimpleKeyboard {
 
             if is_active {
                 eprintln!("Showing keyboard (text input focused)");
-                window.resize(size(px(600.), px(250.)));
+                window.resize(size(px(540. / 2.0), px(150.)));
             } else {
                 eprintln!("Hiding keyboard (no text input focused)");
-                window.resize(size(px(1.), px(1.)));
+                window.resize(size(px(540. / 2.0), px(1.)));
             }
 
             cx.notify();
@@ -123,6 +123,7 @@ impl Render for SimpleKeyboard {
             "Inactive - No Text Input"
         };
 
+        cx.refresh_windows();
         div()
             .size_full()
             .flex()
@@ -141,6 +142,7 @@ impl Render for SimpleKeyboard {
             .children(self.keys.iter().map(|row| {
                 div()
                     .flex()
+                    .justify_center()
                     .gap_2()
                     .children(row.iter().map(|key| {
                         let key_str = *key;
@@ -180,7 +182,7 @@ fn main() {
                 titlebar: None,
                 window_bounds: Some(WindowBounds::Windowed(Bounds {
                     origin: point(px(0.), px(0.)),
-                    size: size(px(600.), px(250.)),
+                    size: size(px(540.), px(250.)),
                 })),
                 app_id: Some("gpui-simple-keyboard".into()),
                 window_background: WindowBackgroundAppearance::Transparent,
