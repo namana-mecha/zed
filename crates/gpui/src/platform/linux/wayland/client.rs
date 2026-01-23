@@ -67,6 +67,9 @@ use wayland_protocols::xdg::shell::client::{xdg_surface, xdg_toplevel, xdg_wm_ba
 use wayland_protocols_misc::zwp_input_method_v2::client::{
     zwp_input_method_manager_v2, zwp_input_method_v2,
 };
+use wayland_protocols::wp::input_method::zv1::client::{
+    zwp_input_method_v1, zwp_input_method_context_v1,
+};
 use wayland_protocols_misc::zwp_virtual_keyboard_v1::client::{
     zwp_virtual_keyboard_manager_v1, zwp_virtual_keyboard_v1,
 };
@@ -113,6 +116,13 @@ const MIN_KEYCODE: u32 = 8;
 
 const UNKNOWN_KEYBOARD_LAYOUT_NAME: SharedString = SharedString::new_static("unknown");
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum InputMethodVersion {
+    None,
+    V1,
+    V2,
+}
+
 #[derive(Clone)]
 pub struct Globals {
     pub qh: QueueHandle<WaylandClientStatePtr>,
@@ -136,6 +146,7 @@ pub struct Globals {
     pub blur_manager: Option<org_kde_kwin_blur_manager::OrgKdeKwinBlurManager>,
     pub text_input_manager: Option<zwp_text_input_manager_v3::ZwpTextInputManagerV3>,
     pub input_method_manager: Option<zwp_input_method_manager_v2::ZwpInputMethodManagerV2>,
+    pub input_method_v1: Option<zwp_input_method_v1::ZwpInputMethodV1>,
     pub virtual_keyboard_manager:
         Option<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1>,
     pub executor: ForegroundExecutor,
@@ -179,6 +190,7 @@ impl Globals {
             blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
             input_method_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            input_method_v1: globals.bind(&qh, 1..=1, ()).ok(),
             virtual_keyboard_manager: globals.bind(&qh, 1..=1, ()).ok(),
             executor,
             qh,
@@ -230,6 +242,9 @@ pub(crate) struct WaylandClientState {
     primary_selection: Option<zwp_primary_selection_device_v1::ZwpPrimarySelectionDeviceV1>,
     text_input: Option<zwp_text_input_v3::ZwpTextInputV3>,
     pub(crate) input_method: Option<zwp_input_method_v2::ZwpInputMethodV2>,
+    pub(crate) input_method_v1: Option<zwp_input_method_v1::ZwpInputMethodV1>,
+    pub(crate) input_method_context_v1: Option<zwp_input_method_context_v1::ZwpInputMethodContextV1>,
+    pub(crate) input_method_version: InputMethodVersion,
     pub(crate) virtual_keyboard: Option<zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1>,
     pub(crate) input_method_active: bool,
     pub(crate) surrounding_text: Option<(String, u32, u32)>,
@@ -400,10 +415,22 @@ impl WaylandClientStatePtr {
     pub fn get_input_method(&self) -> Option<super::input_method::InputMethodHandle> {
         let client = self.get_client();
         let state = client.borrow();
-        if state.input_method.is_some() {
-            Some(super::input_method::InputMethodHandle::new(client.clone()))
-        } else {
-            None
+        match state.input_method_version {
+            InputMethodVersion::V1 => {
+                if state.input_method_v1.is_some() {
+                    Some(super::input_method::InputMethodHandle::new(client.clone()))
+                } else {
+                    None
+                }
+            }
+            InputMethodVersion::V2 => {
+                if state.input_method.is_some() {
+                    Some(super::input_method::InputMethodHandle::new(client.clone()))
+                } else {
+                    None
+                }
+            }
+            InputMethodVersion::None => None,
         }
     }
 
@@ -672,6 +699,9 @@ impl WaylandClient {
             primary_selection,
             text_input: None,
             input_method: None,
+            input_method_v1: None,
+            input_method_context_v1: None,
+            input_method_version: InputMethodVersion::None,
             virtual_keyboard: None,
             input_method_active: false,
             surrounding_text: None,
@@ -1459,26 +1489,37 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
         {
             let client = state.get_client();
             let mut state = client.borrow_mut();
+
+            // Create text input and input method - these work independently of keyboard capability
+            state.text_input = state
+                .globals
+                .text_input_manager
+                .as_ref()
+                .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
+
+            state.input_method = state
+                .globals
+                .input_method_manager
+                .as_ref()
+                .map(|manager| manager.get_input_method(seat, qh, ()));
+
+            if state.input_method.is_some() {
+                state.input_method_version = InputMethodVersion::V2;
+            } else {
+                state.input_method_v1 = state.globals.input_method_v1.clone();
+                if state.input_method_v1.is_some() {
+                    state.input_method_version = InputMethodVersion::V1;
+                }
+            }
+
+            state.virtual_keyboard = state
+                .globals
+                .virtual_keyboard_manager
+                .as_ref()
+                .map(|manager| manager.create_virtual_keyboard(seat, qh, ()));
+
             if capabilities.contains(wl_seat::Capability::Keyboard) {
                 let keyboard = seat.get_keyboard(qh, ());
-
-                state.text_input = state
-                    .globals
-                    .text_input_manager
-                    .as_ref()
-                    .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
-
-                state.input_method = state
-                    .globals
-                    .input_method_manager
-                    .as_ref()
-                    .map(|manager| manager.get_input_method(seat, qh, ()));
-
-                state.virtual_keyboard = state
-                    .globals
-                    .virtual_keyboard_manager
-                    .as_ref()
-                    .map(|manager| manager.create_virtual_keyboard(seat, qh, ()));
 
                 if let Some(wl_keyboard) = &state.wl_keyboard {
                     wl_keyboard.release();
@@ -1879,6 +1920,69 @@ impl Dispatch<zwp_input_method_v2::ZwpInputMethodV2, ()> for WaylandClientStateP
             zwp_input_method_v2::Event::Unavailable => {
                 state.input_method_active = false;
             }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwp_input_method_v1::ZwpInputMethodV1, ()> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        _input_method: &zwp_input_method_v1::ZwpInputMethodV1,
+        event: <zwp_input_method_v1::ZwpInputMethodV1 as Proxy>::Event,
+        _: &(),
+        _conn: &Connection,
+        _qh: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let mut state = client.borrow_mut();
+
+        match event {
+            zwp_input_method_v1::Event::Activate { id } => {
+                state.input_method_active = true;
+                state.input_method_context_v1 = Some(id);
+            }
+            zwp_input_method_v1::Event::Deactivate { context } => {
+                state.input_method_active = false;
+                if let Some(ref ctx) = state.input_method_context_v1 {
+                    if ctx.id() == context.id() {
+                        state.input_method_context_v1 = None;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+impl Dispatch<zwp_input_method_context_v1::ZwpInputMethodContextV1, ()> for WaylandClientStatePtr {
+    fn event(
+        this: &mut Self,
+        _context: &zwp_input_method_context_v1::ZwpInputMethodContextV1,
+        event: <zwp_input_method_context_v1::ZwpInputMethodContextV1 as Proxy>::Event,
+        _: &(),
+        _: &Connection,
+        _: &QueueHandle<Self>,
+    ) {
+        let client = this.get_client();
+        let mut state = client.borrow_mut();
+
+        match event {
+            zwp_input_method_context_v1::Event::SurroundingText { text, cursor, anchor } => {
+                state.surrounding_text = Some((text, cursor, anchor));
+            }
+            zwp_input_method_context_v1::Event::Reset => {
+                // Clear composition state
+                state.surrounding_text = None;
+            }
+            zwp_input_method_context_v1::Event::ContentType { hint, purpose } => {
+                state.content_type = (hint, purpose);
+            }
+            zwp_input_method_context_v1::Event::CommitState { serial } => {
+                state.serial_tracker.update(SerialKind::InputMethod, serial);
+            }
+            zwp_input_method_context_v1::Event::PreferredLanguage { .. } => {}
+            zwp_input_method_context_v1::Event::InvokeAction { .. } => {}
             _ => {}
         }
     }

@@ -92,10 +92,23 @@ impl InputMethodHandle {
     /// * `text` - The text to commit
     pub fn commit_string(&self, text: &str) {
         let client = self.client.borrow();
-        if let Some(ref im) = client.input_method {
-            im.commit_string(text.to_string());
-            // Flush to ensure the event is sent immediately
-            client.connection.flush().log_err();
+        match client.input_method_version {
+            super::client::InputMethodVersion::V1 => {
+                if let Some(ref ctx) = client.input_method_context_v1 {
+                    let serial = client
+                        .serial_tracker
+                        .get(super::serial::SerialKind::InputMethod);
+                    ctx.commit_string(serial, text.to_string());
+                    client.connection.flush().log_err();
+                }
+            }
+            super::client::InputMethodVersion::V2 => {
+                if let Some(ref im) = client.input_method {
+                    im.commit_string(text.to_string());
+                    client.connection.flush().log_err();
+                }
+            }
+            super::client::InputMethodVersion::None => {}
         }
     }
 
@@ -107,10 +120,24 @@ impl InputMethodHandle {
     /// * `cursor_end` - End of cursor position in the pre-edit text
     pub fn set_preedit(&self, text: &str, cursor_begin: i32, cursor_end: i32) {
         let client = self.client.borrow();
-        if let Some(ref im) = client.input_method {
-            im.set_preedit_string(text.to_string(), cursor_begin, cursor_end);
-            // Flush to ensure the event is sent immediately
-            client.connection.flush().log_err();
+        match client.input_method_version {
+            super::client::InputMethodVersion::V1 => {
+                if let Some(ref ctx) = client.input_method_context_v1 {
+                    let serial = client
+                        .serial_tracker
+                        .get(super::serial::SerialKind::InputMethod);
+                    ctx.preedit_cursor(cursor_begin);
+                    ctx.preedit_string(serial, text.to_string(), String::new());
+                    client.connection.flush().log_err();
+                }
+            }
+            super::client::InputMethodVersion::V2 => {
+                if let Some(ref im) = client.input_method {
+                    im.set_preedit_string(text.to_string(), cursor_begin, cursor_end);
+                    client.connection.flush().log_err();
+                }
+            }
+            super::client::InputMethodVersion::None => {}
         }
     }
 
@@ -121,10 +148,22 @@ impl InputMethodHandle {
     /// * `after_length` - Number of bytes to delete after the cursor
     pub fn delete_surrounding_text(&self, before_length: u32, after_length: u32) {
         let client = self.client.borrow();
-        if let Some(ref im) = client.input_method {
-            im.delete_surrounding_text(before_length, after_length);
-            // Flush to ensure the event is sent immediately
-            client.connection.flush().log_err();
+        match client.input_method_version {
+            super::client::InputMethodVersion::V1 => {
+                if let Some(ref ctx) = client.input_method_context_v1 {
+                    let index = -(before_length as i32);
+                    let length = before_length + after_length;
+                    ctx.delete_surrounding_text(index, length);
+                    client.connection.flush().log_err();
+                }
+            }
+            super::client::InputMethodVersion::V2 => {
+                if let Some(ref im) = client.input_method {
+                    im.delete_surrounding_text(before_length, after_length);
+                    client.connection.flush().log_err();
+                }
+            }
+            super::client::InputMethodVersion::None => {}
         }
     }
 
@@ -133,13 +172,21 @@ impl InputMethodHandle {
     /// This should be called after sending text or pre-edit changes.
     pub fn commit(&self) {
         let client = self.client.borrow();
-        if let Some(ref im) = client.input_method {
-            let serial = client
-                .serial_tracker
-                .get(super::serial::SerialKind::InputMethod);
-            im.commit(serial);
-            // Flush to ensure the event is sent immediately
-            client.connection.flush().log_err();
+        match client.input_method_version {
+            super::client::InputMethodVersion::V1 => {
+                // v1 doesn't need explicit commit - each request includes serial
+                client.connection.flush().log_err();
+            }
+            super::client::InputMethodVersion::V2 => {
+                if let Some(ref im) = client.input_method {
+                    let serial = client
+                        .serial_tracker
+                        .get(super::serial::SerialKind::InputMethod);
+                    im.commit(serial);
+                    client.connection.flush().log_err();
+                }
+            }
+            super::client::InputMethodVersion::None => {}
         }
     }
 
