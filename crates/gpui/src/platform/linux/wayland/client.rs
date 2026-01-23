@@ -246,6 +246,7 @@ pub(crate) struct WaylandClientState {
     pub(crate) input_method_context_v1: Option<zwp_input_method_context_v1::ZwpInputMethodContextV1>,
     pub(crate) input_method_version: InputMethodVersion,
     pub(crate) virtual_keyboard: Option<zwp_virtual_keyboard_v1::ZwpVirtualKeyboardV1>,
+    last_virtual_keyboard_keymap: Option<String>,
     pub(crate) input_method_active: bool,
     pub(crate) surrounding_text: Option<(String, u32, u32)>,
     pub(crate) content_type: (u32, u32),
@@ -703,6 +704,7 @@ impl WaylandClient {
             input_method_context_v1: None,
             input_method_version: InputMethodVersion::None,
             virtual_keyboard: None,
+            last_virtual_keyboard_keymap: None,
             input_method_active: false,
             surrounding_text: None,
             content_type: (0, 0),
@@ -1596,25 +1598,30 @@ impl Dispatch<wl_keyboard::WlKeyboard, ()> for WaylandClientStatePtr {
                 state.keymap_state = Some(xkb::State::new(&keymap));
                 state.compose_state = get_xkb_compose_state(&xkb_context);
 
-                // Send keymap to virtual keyboard if it exists
+                // Send keymap to virtual keyboard if it exists and has changed
                 if let Some(ref vk) = state.virtual_keyboard {
                     let keymap_str = keymap.get_as_string(xkb::KEYMAP_FORMAT_TEXT_V1);
-                    use std::ffi::CString;
-                    use std::io::Write;
-                    use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd};
 
-                    let keymap_bytes = keymap_str.as_bytes();
+                    // Only send if the keymap has changed to avoid feedback loop
+                    if state.last_virtual_keyboard_keymap.as_ref() != Some(&keymap_str) {
+                        use std::ffi::CString;
+                        use std::io::Write;
+                        use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd};
 
-                    // Create memfd using libc
-                    let name = CString::new("keymap").unwrap();
-                    let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
+                        let keymap_bytes = keymap_str.as_bytes();
 
-                    if fd >= 0 {
-                        let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
-                        if file.write_all(keymap_bytes).is_ok() && file.flush().is_ok() {
-                            let size = keymap_bytes.len() as u32;
-                            vk.keymap(1, unsafe { BorrowedFd::borrow_raw(file.as_raw_fd()) }, size);
-                            state.connection.flush().log_err();
+                        // Create memfd using libc
+                        let name = CString::new("keymap").unwrap();
+                        let fd = unsafe { libc::memfd_create(name.as_ptr(), libc::MFD_CLOEXEC) };
+
+                        if fd >= 0 {
+                            let mut file = unsafe { std::fs::File::from_raw_fd(fd) };
+                            if file.write_all(keymap_bytes).is_ok() && file.flush().is_ok() {
+                                let size = keymap_bytes.len() as u32;
+                                vk.keymap(1, unsafe { BorrowedFd::borrow_raw(file.as_raw_fd()) }, size);
+                                state.connection.flush().log_err();
+                                state.last_virtual_keyboard_keymap = Some(keymap_str);
+                            }
                         }
                     }
                 }
