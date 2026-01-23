@@ -9,7 +9,7 @@ use glutin::{
 };
 // Explicitly import Impeller types to avoid ambiguity
 use impellers::{
-    BlendMode, Color, ColorFilter, ColorMatrix, ColorSource, DisplayListBuilder,
+    BlendMode, ClipOperation, Color, ColorFilter, ColorMatrix, ColorSource, DisplayListBuilder,
     DrawStyle, FillType, ISize, ImageFilter, Matrix, Paint, PathBuilder,
     Point, Rect as ImpellerRect, RoundingRadii,
     Size as ImpellerSize, TextureSampling, TileMode,
@@ -284,6 +284,11 @@ impl PlatformRenderer for ImpellerRenderer {
                             continue;
                         }
 
+                        // Apply content mask clipping
+                        builder.save();
+                        let content_mask_rect: ImpellerRect = q.content_mask.bounds.into();
+                        builder.clip_rect(&content_mask_rect, ClipOperation::Intersect);
+
                         let is_sharp_rect = q.corner_radii.top_left.0 == 0.0
                             && q.corner_radii.top_right.0 == 0.0
                             && q.corner_radii.bottom_left.0 == 0.0
@@ -438,11 +443,17 @@ impl PlatformRenderer for ImpellerRenderer {
                                 );
                             }
                         }
+
+                        builder.restore();
                     }
                 }
                 PrimitiveBatch::Polygons(polygons) => {
                     for polygon in polygons.iter() {
                         if polygon.points.is_empty() { continue; }
+
+                        builder.save();
+                        let content_mask_rect: ImpellerRect = polygon.content_mask.bounds.into();
+                        builder.clip_rect(&content_mask_rect, ClipOperation::Intersect);
 
                         let mut path_builder = PathBuilder::default();
                         let first = &polygon.points[0];
@@ -469,11 +480,18 @@ impl PlatformRenderer for ImpellerRenderer {
                             aux_paint.set_draw_style(DrawStyle::Stroke);
                             builder.draw_path(&impeller_path, &aux_paint);
                         }
+
+                        builder.restore();
                     }
                 }
                 PrimitiveBatch::Paths(paths) => {
                     for path in paths.iter() {
                         if path.vertices.is_empty() { continue; }
+
+                        builder.save();
+                        let content_mask_rect: ImpellerRect = path.content_mask.bounds.into();
+                        builder.clip_rect(&content_mask_rect, ClipOperation::Intersect);
+
                         let mut path_builder = PathBuilder::default();
                         let origin = path.bounds.origin;
                         let size = path.bounds.size;
@@ -482,9 +500,11 @@ impl PlatformRenderer for ImpellerRenderer {
                             ImpellerSize::new(size.width.0, size.height.0),
                         ));
                         let impeller_path = path_builder.take_path_new(FillType::NonZero);
-                        
+
                         paint.set_color(path.color.solid.into());
                         builder.draw_path(&impeller_path, &paint);
+
+                        builder.restore();
                     }
                 }
                 PrimitiveBatch::Shadows(shadows) => {
@@ -492,6 +512,10 @@ impl PlatformRenderer for ImpellerRenderer {
                         let rect: ImpellerRect = shadow.bounds.into();
                         // Fix: Borrow check for intersection
                         if !viewport_rect.intersects(&rect) { continue; }
+
+                        builder.save();
+                        let content_mask_rect: ImpellerRect = shadow.content_mask.bounds.into();
+                        builder.clip_rect(&content_mask_rect, ClipOperation::Intersect);
 
                         let radii: RoundingRadii = shadow.corner_radii.into();
                         let blur_sigma = shadow.blur_radius.0 / 2.0;
@@ -510,11 +534,18 @@ impl PlatformRenderer for ImpellerRenderer {
                             aux_paint.set_image_filter(&blur_filter);
                         }
                         builder.draw_rounded_rect(&shadow_rect, &radii, &aux_paint);
+
+                        builder.restore();
                     }
                 }
                 PrimitiveBatch::Underlines(underlines) => {
                     for underline in underlines.iter() {
                         let rect: ImpellerRect = underline.bounds.into();
+
+                        builder.save();
+                        let content_mask_rect: ImpellerRect = underline.content_mask.bounds.into();
+                        builder.clip_rect(&content_mask_rect, ClipOperation::Intersect);
+
                         paint.set_color(underline.color.into());
 
                         if underline.wavy != 0 {
@@ -527,10 +558,12 @@ impl PlatformRenderer for ImpellerRenderer {
                             );
                         } else {
                             builder.draw_rect(&ImpellerRect::new(
-                                rect.origin, 
+                                rect.origin,
                                 ImpellerSize::new(rect.size.width, underline.thickness.0)
                             ), &paint);
                         }
+
+                        builder.restore();
                     }
                 }
                 PrimitiveBatch::MonochromeSprites { texture_id, sprites } => {
@@ -538,6 +571,10 @@ impl PlatformRenderer for ImpellerRenderer {
                         for sprite in sprites.iter() {
                             let rect: ImpellerRect = sprite.bounds.into();
                             if !viewport_rect.intersects(&rect) { continue; }
+
+                            builder.save();  // For clipping
+                            let content_mask_rect: ImpellerRect = sprite.content_mask.bounds.into();
+                            builder.clip_rect(&content_mask_rect, ClipOperation::Intersect);
 
                             let color: Color = sprite.color.into();
                             
@@ -578,6 +615,8 @@ impl PlatformRenderer for ImpellerRenderer {
                                 );
                                 builder.restore();
                             }
+
+                            builder.restore();  // Restore clipping
                         }
                      }
                 }
@@ -586,6 +625,10 @@ impl PlatformRenderer for ImpellerRenderer {
                          for sprite in sprites.iter() {
                             let rect: ImpellerRect = sprite.bounds.into();
                             if !viewport_rect.intersects(&rect) { continue; }
+
+                            builder.save();
+                            let content_mask_rect: ImpellerRect = sprite.content_mask.bounds.into();
+                            builder.clip_rect(&content_mask_rect, ClipOperation::Intersect);
 
                             aux_paint = Paint::default();
                             aux_paint.set_blend_mode(BlendMode::SourceOver);
@@ -611,6 +654,8 @@ impl PlatformRenderer for ImpellerRenderer {
                             builder.draw_texture_rect(
                                 &texture, &src_rect, &rect, TextureSampling::Linear, Some(&aux_paint)
                             );
+
+                            builder.restore();
                          }
                     }
                 }
