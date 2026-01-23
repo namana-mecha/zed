@@ -44,7 +44,7 @@ use util::ResultExt;
 
 use super::ImageCacheProvider;
 
-const DRAG_THRESHOLD: f64 = 2.;
+const DRAG_THRESHOLD: f64 = 20.;
 const TOOLTIP_SHOW_DELAY: Duration = Duration::from_millis(500);
 const HOVERABLE_TOOLTIP_HIDE_DELAY: Duration = Duration::from_millis(500);
 const LONG_PRESS_DURATION: Duration = Duration::from_millis(500);
