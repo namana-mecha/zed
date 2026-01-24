@@ -150,6 +150,10 @@ pub struct Globals {
     pub virtual_keyboard_manager:
         Option<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1>,
     pub executor: ForegroundExecutor,
+    registry: wl_registry::WlRegistry,
+    input_method_manager_global: Option<(u32, u32)>,
+    input_method_v1_global: Option<(u32, u32)>,
+    virtual_keyboard_manager_global: Option<(u32, u32)>,
 }
 
 impl Globals {
@@ -159,6 +163,29 @@ impl Globals {
         qh: QueueHandle<WaylandClientStatePtr>,
         seat: wl_seat::WlSeat,
     ) -> Self {
+        let registry = globals.registry().clone();
+
+        let mut input_method_manager_global = None;
+        let mut input_method_v1_global = None;
+        let mut virtual_keyboard_manager_global = None;
+
+        globals.contents().with_list(|list| {
+            for global in list {
+                match &global.interface[..] {
+                    "zwp_input_method_manager_v2" => {
+                        input_method_manager_global = Some((global.name, global.version));
+                    }
+                    "zwp_input_method_v1" => {
+                        input_method_v1_global = Some((global.name, global.version));
+                    }
+                    "zwp_virtual_keyboard_manager_v1" => {
+                        virtual_keyboard_manager_global = Some((global.name, global.version));
+                    }
+                    _ => {}
+                }
+            }
+        });
+
         Globals {
             activation: globals.bind(&qh, 1..=1, ()).ok(),
             compositor: globals
@@ -189,11 +216,44 @@ impl Globals {
             foreign_toplevel_manager: globals.bind(&qh, 1..=3, ()).ok(),
             blur_manager: globals.bind(&qh, 1..=1, ()).ok(),
             text_input_manager: globals.bind(&qh, 1..=1, ()).ok(),
-            input_method_manager: globals.bind(&qh, 1..=1, ()).ok(),
-            input_method_v1: globals.bind(&qh, 1..=1, ()).ok(),
-            virtual_keyboard_manager: globals.bind(&qh, 1..=1, ()).ok(),
+            input_method_manager: None,
+            input_method_v1: None,
+            virtual_keyboard_manager: None,
             executor,
-            qh,
+            qh: qh.clone(),
+            registry,
+            input_method_manager_global,
+            input_method_v1_global,
+            virtual_keyboard_manager_global,
+        }
+    }
+
+    pub(crate) fn bind_input_method_protocols(&mut self) {
+        if let Some((name, version)) = self.input_method_manager_global {
+            self.input_method_manager = Some(self.registry.bind::<zwp_input_method_manager_v2::ZwpInputMethodManagerV2, _, _>(
+                name,
+                version.min(1),
+                &self.qh,
+                (),
+            ));
+        }
+
+        if let Some((name, version)) = self.input_method_v1_global {
+            self.input_method_v1 = Some(self.registry.bind::<zwp_input_method_v1::ZwpInputMethodV1, _, _>(
+                name,
+                version.min(1),
+                &self.qh,
+                (),
+            ));
+        }
+
+        if let Some((name, version)) = self.virtual_keyboard_manager_global {
+            self.virtual_keyboard_manager = Some(self.registry.bind::<zwp_virtual_keyboard_manager_v1::ZwpVirtualKeyboardManagerV1, _, _>(
+                name,
+                version.min(1),
+                &self.qh,
+                (),
+            ));
         }
     }
 }
@@ -975,7 +1035,9 @@ impl LinuxClient for WaylandClient {
     }
 
     fn set_acts_as_input_method(&self) {
-        self.0.borrow().acts_as_input_method.set(true);
+        let mut state = self.0.borrow_mut();
+        state.acts_as_input_method.set(true);
+        state.globals.bind_input_method_protocols();
     }
 
     fn write_to_primary(&self, item: crate::ClipboardItem) {
