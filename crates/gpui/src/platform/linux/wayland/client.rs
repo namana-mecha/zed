@@ -1,5 +1,5 @@
 use std::{
-    cell::{RefCell, RefMut},
+    cell::{Cell, RefCell, RefMut},
     hash::Hash,
     os::fd::{AsRawFd, BorrowedFd},
     path::PathBuf,
@@ -253,6 +253,7 @@ pub(crate) struct WaylandClientState {
     pre_edit_text: Option<String>,
     ime_pre_edit: Option<String>,
     composing: bool,
+    acts_as_input_method: Cell<bool>,
     // Surface to Window mapping
     windows: HashMap<ObjectId, WaylandWindowStatePtr>,
     // Output to scale mapping
@@ -711,6 +712,7 @@ impl WaylandClient {
             pre_edit_text: None,
             ime_pre_edit: None,
             composing: false,
+            acts_as_input_method: Cell::new(false),
             outputs: HashMap::default(),
             output_handles: HashMap::default(),
             in_progress_outputs,
@@ -970,6 +972,10 @@ impl LinuxClient for WaylandClient {
                 |_| {},
             )
             .log_err();
+    }
+
+    fn set_acts_as_input_method(&self) {
+        self.0.borrow().acts_as_input_method.set(true);
     }
 
     fn write_to_primary(&self, item: crate::ClipboardItem) {
@@ -1499,26 +1505,29 @@ impl Dispatch<wl_seat::WlSeat, ()> for WaylandClientStatePtr {
                 .as_ref()
                 .map(|text_input_manager| text_input_manager.get_text_input(seat, qh, ()));
 
-            state.input_method = state
-                .globals
-                .input_method_manager
-                .as_ref()
-                .map(|manager| manager.get_input_method(seat, qh, ()));
+            // Only bind to input method protocols if this app explicitly declares it acts as an IME
+            if state.acts_as_input_method.get() {
+                state.input_method = state
+                    .globals
+                    .input_method_manager
+                    .as_ref()
+                    .map(|manager| manager.get_input_method(seat, qh, ()));
 
-            if state.input_method.is_some() {
-                state.input_method_version = InputMethodVersion::V2;
-            } else {
-                state.input_method_v1 = state.globals.input_method_v1.clone();
-                if state.input_method_v1.is_some() {
-                    state.input_method_version = InputMethodVersion::V1;
+                if state.input_method.is_some() {
+                    state.input_method_version = InputMethodVersion::V2;
+                } else {
+                    state.input_method_v1 = state.globals.input_method_v1.clone();
+                    if state.input_method_v1.is_some() {
+                        state.input_method_version = InputMethodVersion::V1;
+                    }
                 }
-            }
 
-            state.virtual_keyboard = state
-                .globals
-                .virtual_keyboard_manager
-                .as_ref()
-                .map(|manager| manager.create_virtual_keyboard(seat, qh, ()));
+                state.virtual_keyboard = state
+                    .globals
+                    .virtual_keyboard_manager
+                    .as_ref()
+                    .map(|manager| manager.create_virtual_keyboard(seat, qh, ()));
+            }
 
             if capabilities.contains(wl_seat::Capability::Keyboard) {
                 let keyboard = seat.get_keyboard(qh, ());

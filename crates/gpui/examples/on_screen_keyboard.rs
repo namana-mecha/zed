@@ -176,7 +176,9 @@ impl Render for SimpleKeyboard {
 }
 
 fn main() {
-    Application::new().run(|cx: &mut App| {
+    Application::new()
+        .acts_as_input_method()
+        .run(|cx: &mut App| {
         cx.open_window(
             WindowOptions {
                 titlebar: None,

@@ -74,6 +74,8 @@ pub trait LinuxClient {
     fn window_stack(&self) -> Option<Vec<AnyWindowHandle>>;
     fn run(&self);
 
+    fn set_acts_as_input_method(&self) {}
+
     #[cfg(any(feature = "wayland", feature = "x11"))]
     fn window_identifier(
         &self,
@@ -590,6 +592,10 @@ impl<P: LinuxClient + 'static> Platform for P {
     }
 
     fn add_recent_document(&self, _path: &Path) {}
+
+    fn set_acts_as_input_method(&self) {
+        LinuxClient::set_acts_as_input_method(self)
+    }
 }
 
 #[cfg(any(feature = "wayland", feature = "x11"))]

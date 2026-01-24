@@ -176,6 +176,18 @@ impl Application {
         self
     }
 
+    /// Configures this application to act as a system input method (IME).
+    ///
+    /// This should only be used for applications that implement virtual keyboards
+    /// or other input method functionality. Regular applications should not call this,
+    /// as it will prevent the system's onscreen keyboard from working for other apps.
+    ///
+    /// This must be called before `run()`.
+    pub fn acts_as_input_method(self) -> Self {
+        self.0.borrow().platform.set_acts_as_input_method();
+        self
+    }
+
     /// Start the application. The provided callback will be called once the
     /// app is fully launched.
     pub fn run<F>(self, on_finish_launching: F)
