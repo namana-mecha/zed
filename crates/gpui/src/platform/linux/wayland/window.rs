@@ -518,6 +518,20 @@ impl WaylandWindow {
         self.0.state.borrow_mut()
     }
 
+    pub fn set_keyboard_interactivity(
+        &self,
+        keyboard_interactivity: crate::layer_shell::KeyboardInteractivity,
+    ) {
+        let state = self.borrow();
+        match &state.surface_state {
+            WaylandSurfaceState::LayerShell(WaylandLayerSurfaceState { layer_surface }) => {
+                layer_surface.set_keyboard_interactivity(keyboard_interactivity.into());
+                state.surface.commit();
+            }
+            _ => panic!("set_keyboard_interactivity can only be called on layer shell windows"),
+        }
+    }
+
     pub fn new(
         handle: AnyWindowHandle,
         globals: Globals,

@@ -2498,6 +2498,7 @@ impl Dispatch<wl_touch::WlTouch, ()> for WaylandClientStatePtr {
 
                     drop(state);
                     window.handle_input(input);
+                    window.set_hovered(true);
                 }
             }
 
@@ -2544,6 +2545,7 @@ impl Dispatch<wl_touch::WlTouch, ()> for WaylandClientStatePtr {
 
                     drop(state);
                     window.handle_input(input);
+                    window.set_hovered(false);
                 }
             }
 
