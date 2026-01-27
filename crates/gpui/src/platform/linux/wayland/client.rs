@@ -955,24 +955,19 @@ impl LinuxClient for WaylandClient {
             let serial = state.serial_tracker.get(SerialKind::MouseEnter);
             state.cursor_style = Some(style);
 
-            if let CursorStyle::None = style {
-                let wl_pointer = state
-                    .wl_pointer
-                    .clone()
-                    .expect("window is focused by pointer");
-                wl_pointer.set_cursor(serial, None, 0, 0);
-            } else if let Some(cursor_shape_device) = &state.cursor_shape_device {
-                cursor_shape_device.set_shape(serial, style.to_shape());
-            } else if let Some(focused_window) = &state.mouse_focused_window {
-                // cursor-shape-v1 isn't supported, set the cursor using a surface.
-                let wl_pointer = state
-                    .wl_pointer
-                    .clone()
-                    .expect("window is focused by pointer");
-                let scale = focused_window.primary_output_scale();
-                state
-                    .cursor
-                    .set_icon(&wl_pointer, serial, style.to_icon_names(), scale);
+            // Only set cursor if we have an actual pointer device (not touch input)
+            if let Some(wl_pointer) = state.wl_pointer.clone() {
+                if let CursorStyle::None = style {
+                    wl_pointer.set_cursor(serial, None, 0, 0);
+                } else if let Some(cursor_shape_device) = &state.cursor_shape_device {
+                    cursor_shape_device.set_shape(serial, style.to_shape());
+                } else if let Some(focused_window) = &state.mouse_focused_window {
+                    // cursor-shape-v1 isn't supported, set the cursor using a surface.
+                    let scale = focused_window.primary_output_scale();
+                    state
+                        .cursor
+                        .set_icon(&wl_pointer, serial, style.to_icon_names(), scale);
+                }
             }
         }
     }
