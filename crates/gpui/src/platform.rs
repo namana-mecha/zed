@@ -563,6 +563,8 @@ pub(crate) trait PlatformWindow: HasWindowHandle + HasDisplayHandle {
         WindowControls::default()
     }
     fn set_client_inset(&self, _inset: Pixels) {}
+    #[cfg(target_os = "linux")]
+    fn set_keyboard_interactivity(&self, _interactivity: layer_shell::KeyboardInteractivity) {}
     fn gpu_specs(&self) -> Option<GpuSpecs>;
 
     fn update_ime_position(&self, _bounds: Bounds<Pixels>);

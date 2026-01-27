@@ -1533,6 +1533,12 @@ impl Window {
         self.platform_window.start_window_resize(edge);
     }
 
+    /// Set keyboard interactivity mode for layer shell windows (Wayland)
+    #[cfg(target_os = "linux")]
+    pub fn set_keyboard_interactivity(&self, interactivity: crate::layer_shell::KeyboardInteractivity) {
+        self.platform_window.set_keyboard_interactivity(interactivity);
+    }
+
     /// Return the `WindowBounds` to indicate that how a window should be opened
     /// after it has been closed
     pub fn window_bounds(&self) -> WindowBounds {
