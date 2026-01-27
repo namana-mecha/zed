@@ -85,15 +85,15 @@ impl<'de> Deserialize<'de> for Anchor {
 pub enum KeyboardInteractivity {
     /// No keyboard inputs will be delivered to the surface and it won't be able to receive
     /// keyboard focus.
-    None,
+    None = 0,
 
     /// The surface will receive exclusive keyboard focus as long as it is above the shell surface
     /// layer, and no other layer_shell surfaces are above it.
-    Exclusive,
+    Exclusive = 2,
 
     /// The surface can be focused similarly to a normal window.
     #[default]
-    OnDemand,
+    OnDemand = 1,
 }
 
 impl From<KeyboardInteractivity> for zwlr_layer_surface_v1::KeyboardInteractivity {
